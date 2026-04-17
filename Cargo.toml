@@ -1,0 +1,46 @@
+[package]
+name = "starcitizen-freight"
+version = "0.1.0"
+edition = "2021"
+description = "Dead-simple Star Citizen cargo profit calculator"
+license = "MIT"
+repository = "https://github.com/Jind0la/starcitizen-freight"
+authors = ["Jind0la"]
+
+[[bin]]
+name = "freight"
+path = "src/main.rs"
+
+[dependencies]
+# HTTP client
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# CLI / TUI
+ratatui = "0.28"
+crossterm = "0.28"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Environment variables
+dotenvy = "0.15"
+
+# Async caching
+# (manual in-memory cache, no external crate needed)
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
