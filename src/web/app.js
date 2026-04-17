@@ -11,6 +11,7 @@ const state = {
   minMargin: 0,
   tab: 'all',
   routes: [],
+  loops: [],
   counts: { all: 0, intra_system: 0, interstellar: 0 },
   loading: false,
   error: null,
@@ -39,6 +40,7 @@ const tabLabel       = $('tabLabel');
 const countAll       = $('countAll');
 const countIntra     = $('countIntra');
 const countInter     = $('countInter');
+const countLoops     = $('countLoops');
 const tabBtns        = document.querySelectorAll('.tab-btn');
 
 // ─── Helpers ───────────────────────────────────────────────────────
@@ -128,23 +130,39 @@ async function calculate() {
   }
 
   try {
-    const res = await fetch(`${API_BASE}/routes?${params}`);
-    if (res.status === 401 || res.status === 403) {
-      throw new Error('UEX API auth failed — check your UEX_API_TOKEN');
-    }
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`API error ${res.status}: ${text}`);
-    }
+    if (state.tab === 'loops') {
+      const res = await fetch(`${API_BASE}/loops?${params}`);
+      if (res.status === 401 || res.status === 403) {
+        throw new Error('UEX API auth failed — check your UEX_API_TOKEN');
+      }
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`API error ${res.status}: ${text}`);
+      }
+      const data = await res.json();
+      state.loops = data.loops || [];
+      state.lastUpdated = data.last_updated;
+      renderLoops(state.loops);
+      setReady(data.last_updated);
+    } else {
+      const res = await fetch(`${API_BASE}/routes?${params}`);
+      if (res.status === 401 || res.status === 403) {
+        throw new Error('UEX API auth failed — check your UEX_API_TOKEN');
+      }
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`API error ${res.status}: ${text}`);
+      }
 
-    const data = await res.json();
-    state.routes = data.routes || [];
-    state.counts = data.route_counts || { all: 0, intra_system: 0, interstellar: 0 };
-    state.lastUpdated = data.last_updated;
+      const data = await res.json();
+      state.routes = data.routes || [];
+      state.counts = data.route_counts || { all: 0, intra_system: 0, interstellar: 0 };
+      state.lastUpdated = data.last_updated;
 
-    updateTabCounts(data.route_counts);
-    renderRoutes(state.routes);
-    setReady(data.last_updated);
+      updateTabCounts(data.route_counts);
+      renderRoutes(state.routes);
+      setReady(data.last_updated);
+    }
   } catch (err) {
     setError(err.message || 'Failed to fetch routes');
     hideResults();
@@ -281,6 +299,186 @@ function renderRoutes(routes) {
   });
 }
 
+// ─── Loop rendering ─────────────────────────────────────────────────────────────
+function renderLoops(loops) {
+  if (!loops || loops.length === 0) {
+    hideResults();
+    emptyState.classList.remove('hidden');
+    return;
+  }
+
+  emptyState.classList.add('hidden');
+  results.classList.remove('hidden');
+
+  routeCount.textContent = loops.length;
+  fuelTotal.textContent = fmt(loops.slice(0, 10).reduce((s, r) => s + r.fuelCost, 0));
+  tabLabel.textContent = 'Loops';
+
+  routesList.innerHTML = '';
+
+  loops.forEach((loop, i) => {
+    const card = document.createElement('div');
+    card.className = 'route-card loop-card';
+
+    const interBadge = loop.isInterstellar
+      ? `<span class="route-system-badge badge-interstellar">Interstellar</span>`
+      : `<span class="route-system-badge badge-intra">Stanton</span>`;
+
+    const dataAge = loop.dataAgeDays !== null ? `${loop.dataAgeDays}d ago` : '—';
+    const marginCls = marginClass(loop.marginPct);
+
+    card.innerHTML = `
+      <div class="route-header" data-index="${i}">
+        <span class="route-rank">#${loop.rank}</span>
+        <span class="route-stars">${starsHTML(loop.stars)}</span>
+        <span class="route-commodity">${escHtml(loop.commodityLeg1)} + ${escHtml(loop.commodityLeg2)}</span>
+        ${interBadge}
+      </div>
+      <div class="route-body">
+        <div class="route-terminals">
+          <span class="terminal-name">${escHtml(loop.origin)}</span>
+          <span class="terminal-arrow">→</span>
+          <span class="terminal-name">${escHtml(loop.destination)}</span>
+          <span class="terminal-arrow">→</span>
+          <span class="terminal-name">${escHtml(loop.origin)}</span>
+          ${loop.isPlayerOwned ? '<span class="player-star">★</span>' : ''}
+        </div>
+        <div class="route-prices">
+          <span class="profit-amount">+${fmt(loop.totalProfit)} aUEC</span>
+          <span class="margin-pct ${marginCls}">${fmtPct(loop.marginPct)} avg margin</span>
+        </div>
+        <div class="route-trade">
+          <span class="trade-scu">${loop.scuToTrade} SCU</span>
+          <span class="trade-arrow">·</span>
+          <span class="trade-buy">Leg1: ${fmt(loop.buyPriceLeg1)}→${fmt(loop.sellPriceLeg1)}</span>
+          <span class="trade-arrow">·</span>
+          <span class="trade-sell">Leg2: ${fmt(loop.buyPriceLeg2)}→${fmt(loop.sellPriceLeg2)}</span>
+        </div>
+        <div class="route-meta">
+          <span class="meta-item">
+            ${stockDot(loop.stockLevel)}
+            Stock
+          </span>
+          <span class="meta-item">
+            ⛽ ${fmt(loop.fuelCost)} fuel
+          </span>
+          <span class="meta-item">
+            💰 ${fmt(loop.profitPerScu)}/SCU
+          </span>
+          <span class="meta-item">
+            🕐 ${dataAge}
+          </span>
+        </div>
+      </div>
+      <div class="route-expanded">
+        <div class="expanded-row">
+          <span class="expanded-label">SCU to trade (each leg)</span>
+          <span class="expanded-value">${loop.scuToTrade}</span>
+        </div>
+        <div class="loop-legs">
+          <div class="loop-leg">
+            <span class="loop-leg-title">Leg 1: ${escHtml(loop.origin)} → ${escHtml(loop.destination)}</span>
+            <div class="expanded-row">
+              <span class="expanded-label">Commodity</span>
+              <span class="expanded-value">${escHtml(loop.commodityLeg1)}</span>
+            </div>
+            <div class="expanded-row">
+              <span class="expanded-label">Buy price</span>
+              <span class="expanded-value">${fmt(loop.buyPriceLeg1)} aUEC</span>
+            </div>
+            <div class="expanded-row">
+              <span class="expanded-label">Sell price</span>
+              <span class="expanded-value">${fmt(loop.sellPriceLeg1)} aUEC</span>
+            </div>
+            <div class="expanded-row">
+              <span class="expanded-label">Gross profit</span>
+              <span class="expanded-value">${fmt(loop.profitLeg1 + loop.fuelCost / 2)} aUEC</span>
+            </div>
+            <div class="expanded-row">
+              <span class="expanded-label">Fuel share</span>
+              <span class="expanded-value warning">−${fmt(loop.fuelCost / 2)} aUEC</span>
+            </div>
+            <div class="expanded-row">
+              <span class="expanded-label">Net profit (Leg 1)</span>
+              <span class="expanded-value">${fmt(loop.profitLeg1)} aUEC</span>
+            </div>
+            <div class="expanded-row">
+              <span class="expanded-label">Margin</span>
+              <span class="expanded-value">${fmtPct(loop.marginPctLeg1)}</span>
+            </div>
+          </div>
+          <div class="loop-leg">
+            <span class="loop-leg-title">Leg 2: ${escHtml(loop.destination)} → ${escHtml(loop.origin)}</span>
+            <div class="expanded-row">
+              <span class="expanded-label">Commodity</span>
+              <span class="expanded-value">${escHtml(loop.commodityLeg2)}</span>
+            </div>
+            <div class="expanded-row">
+              <span class="expanded-label">Buy price</span>
+              <span class="expanded-value">${fmt(loop.buyPriceLeg2)} aUEC</span>
+            </div>
+            <div class="expanded-row">
+              <span class="expanded-label">Sell price</span>
+              <span class="expanded-value">${fmt(loop.sellPriceLeg2)} aUEC</span>
+            </div>
+            <div class="expanded-row">
+              <span class="expanded-label">Gross profit</span>
+              <span class="expanded-value">${fmt(loop.profitLeg2 + loop.fuelCost / 2)} aUEC</span>
+            </div>
+            <div class="expanded-row">
+              <span class="expanded-label">Fuel share</span>
+              <span class="expanded-value warning">−${fmt(loop.fuelCost / 2)} aUEC</span>
+            </div>
+            <div class="expanded-row">
+              <span class="expanded-label">Net profit (Leg 2)</span>
+              <span class="expanded-value">${fmt(loop.profitLeg2)} aUEC</span>
+            </div>
+            <div class="expanded-row">
+              <span class="expanded-label">Margin</span>
+              <span class="expanded-value">${fmtPct(loop.marginPctLeg2)}</span>
+            </div>
+          </div>
+        </div>
+        <div class="expanded-row">
+          <span class="expanded-label">Total fuel cost (round trip)</span>
+          <span class="expanded-value warning">−${fmt(loop.fuelCost)} aUEC</span>
+        </div>
+        <div class="expanded-row">
+          <span class="expanded-label">Total net profit</span>
+          <span class="expanded-value">${fmt(loop.totalProfit)} aUEC</span>
+        </div>
+        <div class="expanded-row">
+          <span class="expanded-label">Profit / SCU</span>
+          <span class="expanded-value">${fmt(loop.profitPerScu)} aUEC</span>
+        </div>
+        <div class="expanded-row">
+          <span class="expanded-label">Distance</span>
+          <span class="expanded-value">${loop.distanceGm.toFixed(1)} GM (outbound)</span>
+        </div>
+        ${loop.isInterstellar ? `
+        <div class="expanded-row">
+          <span class="expanded-label">Destination system</span>
+          <span class="expanded-value">${escHtml(loop.destinationSystem || '—')}</span>
+        </div>
+        <div class="expanded-row">
+          <span class="expanded-label">Quantum jumps</span>
+          <span class="expanded-value">${loop.jumpCount}</span>
+        </div>` : ''}
+        <div class="expanded-row">
+          <span class="expanded-label">Container sizes</span>
+          <span class="expanded-value">${loop.containerSizes || '—'}</span>
+        </div>
+      </div>
+    `;
+
+    card.querySelector('.route-header').addEventListener('click', () => {
+      card.classList.toggle('expanded');
+    });
+
+    routesList.appendChild(card);
+  });
+}
+
 function escHtml(s) {
   if (!s) return '';
   return String(s)
@@ -295,6 +493,7 @@ function updateTabCounts(counts) {
   countAll.textContent   = counts.all || 0;
   countIntra.textContent = counts.intra_system || 0;
   countInter.textContent = counts.interstellar || 0;
+  countLoops.textContent = (state.loops && state.loops.length > 0) ? state.loops.length : '—';
 }
 
 function setLoading(on) {
@@ -335,7 +534,7 @@ function setReady(ts) {
 
 // ─── URL Param handling ─────────────────────────────────────────────
 const SYSTEM_MAP = { stanton: 68, pyro: 64, nyx: 55 };
-const TAB_MAP = { intra: 'intra', interstellar: 'interstellar', all: 'all' };
+const TAB_MAP = { intra: 'intra', interstellar: 'interstellar', loops: 'loops', all: 'all' };
 
 function readUrlParams() {
   const params = new URLSearchParams(window.location.search);

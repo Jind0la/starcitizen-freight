@@ -11,7 +11,7 @@
 //!   net_profit = gross_profit - fuel_cost
 
 use crate::models::{
-    Commodity, RankedRoute, Route, StockLevel, AVAILABLE_SYSTEMS, SYSTEM_ID_PYRO,
+    Commodity, LoopRoute, RankedRoute, Route, StockLevel, AVAILABLE_SYSTEMS, SYSTEM_ID_PYRO,
     SYSTEM_ID_STANTON, SYSTEM_NAME_PYRO, SYSTEM_NAME_STANTON,
 };
 
@@ -506,6 +506,188 @@ pub fn compute_interstellar_profit(
 
     results.into_iter().take(MAX_RESULTS).collect()
 }
+
+// ─── Loop Routes (A→B→A round trips) ─────────────────────────────────────────
+
+/// Compute all valid A→B→A round-trip loops within a single star system.
+/// For each terminal A, finds a commodity to sell A→B and a (possibly different)
+/// commodity to buy B→A, then returns to A with a full cargo hold.
+/// Both legs share the same cargo capacity.
+pub fn compute_loop_routes(
+    routes: &[Route],
+    commodities: &[Commodity],
+    cargo_scu: u32,
+    ship_max_container: Option<u32>,
+    system_id: u32,
+) -> Vec<LoopRoute> {
+    let hydrogen_price = find_hydrogen_price(commodities);
+
+    // Group intra-system routes by (origin, destination) terminal pair.
+    // outbound: origin=A, destination=B  (sell at B)
+    // return:   origin=B, destination=A  (sell at A)
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    struct TerminalPair(u32, u32);
+
+    // outbound routes: A→B (we buy at A, sell at B)
+    let mut outbound_by_pair: std::collections::HashMap<
+        TerminalPair,
+        Vec<&Route>,
+    > = std::collections::HashMap::new();
+
+    // return routes: B→A (we buy at B, sell at A)
+    let mut return_by_pair: std::collections::HashMap<
+        TerminalPair,
+        Vec<&Route>,
+    > = std::collections::HashMap::new();
+
+    for r in routes.iter().filter(|r| {
+        // Intra-system only for now
+        r.star_system_origin_id == r.star_system_destination_id
+            && (system_id == 0 || r.star_system_origin_id == system_id)
+    }) {
+        if r.price_margin <= MIN_MARGIN_PCT {
+            continue;
+        }
+        if r.scu_origin.unwrap_or(f64::MAX) < 1.0 {
+            continue;
+        }
+        if let Some(max) = ship_max_container {
+            if !container_compatible(max, &r.container_sizes_destination) {
+                continue;
+            }
+        }
+
+        let pair = TerminalPair(r.terminal_origin_id, r.terminal_destination_id);
+        outbound_by_pair
+            .entry(pair)
+            .or_insert_with(Vec::new)
+            .push(r);
+
+        // return leg is reversed: origin=destination, destination=origin
+        let return_pair = TerminalPair(r.terminal_destination_id, r.terminal_origin_id);
+        return_by_pair
+            .entry(return_pair)
+            .or_insert_with(Vec::new)
+            .push(r);
+    }
+
+    let mut loops = Vec::new();
+
+    // Iterate over each terminal pair and try to build a loop
+    for (pair, outbound_routes) in &outbound_by_pair {
+        let TerminalPair(term_a, term_b) = *pair;
+        let Some(return_routes) = return_by_pair.get(pair) else {
+            continue;
+        };
+
+        // Try the best outbound route with the best return route
+        // We use the highest-margin outbound route first
+        let Some(out) = outbound_routes
+            .iter()
+            .max_by(|a, b| {
+                a.price_margin
+                    .partial_cmp(&b.price_margin)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+        else {
+            continue;
+        };
+
+        let Some(ret) = return_routes
+            .iter()
+            .max_by(|a, b| {
+                a.price_margin
+                    .partial_cmp(&b.price_margin)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+        else {
+            continue;
+        };
+
+        let scu_to_trade = cargo_scu.min(out.scu_origin.unwrap_or(f64::MAX) as u32).max(1);
+
+        // ── Leg 1: A → B ──────────────────────────────────────────────────────
+        let gross_profit_1 = (out.price_destination - out.price_origin) * scu_to_trade as f64;
+        let jump_count = get_jump_count(out);
+        let is_interstellar = is_cross_system(out);
+        let fuel_cost = estimate_fuel_cost(
+            out.distance,
+            hydrogen_price,
+            is_interstellar,
+            jump_count,
+        );
+        // Round-trip fuel covers both legs
+        let fuel_per_leg = fuel_cost / 2.0;
+
+        let net_profit_1 = gross_profit_1 - fuel_per_leg;
+        let margin_pct_1 = out.price_margin;
+
+        // ── Leg 2: B → A ──────────────────────────────────────────────────────
+        let gross_profit_2 =
+            (ret.price_destination - ret.price_origin) * scu_to_trade as f64;
+        let net_profit_2 = gross_profit_2 - fuel_per_leg;
+        let margin_pct_2 = ret.price_margin;
+
+        let total_profit = net_profit_1 + net_profit_2;
+        let profit_per_scu = if scu_to_trade > 0 {
+            total_profit / scu_to_trade as f64
+        } else {
+            0.0
+        };
+
+        let data_age = data_age_days(out).unwrap_or(0).max(data_age_days(ret).unwrap_or(0));
+        let is_player_owned = out.origin_terminal_is_player_owned.unwrap_or(0) == 1;
+
+        loops.push(LoopRoute {
+            rank: 0,
+            stars: calculate_stars(out).max(calculate_stars(ret)),
+            commodity_leg1: out.commodity_name.clone(),
+            commodity_leg2: ret.commodity_name.clone(),
+            origin: out.terminal_origin_name.clone(),
+            destination: out.terminal_destination_name.clone(),
+            scu_to_trade,
+            buy_price_leg1: out.price_origin,
+            sell_price_leg1: out.price_destination,
+            buy_price_leg2: ret.price_origin,
+            sell_price_leg2: ret.price_destination,
+            profit_leg1: net_profit_1,
+            profit_leg2: net_profit_2,
+            total_profit,
+            profit_per_scu,
+            margin_pct_leg1: margin_pct_1,
+            margin_pct_leg2: margin_pct_2,
+            margin_pct: (margin_pct_1 + margin_pct_2) / 2.0,
+            stock_level: StockLevel::from_status(out.status_destination),
+            fuel_cost,
+            container_sizes: out
+                .container_sizes_destination
+                .clone()
+                .unwrap_or_default(),
+            distance_gm: out.distance.unwrap_or(0.0),
+            data_age_days: Some(data_age),
+            is_player_owned,
+            is_interstellar,
+            jump_count,
+            destination_system: None,
+        });
+    }
+
+    // Sort by total profit descending
+    loops.sort_by(|a, b| {
+        b.total_profit
+            .partial_cmp(&a.total_profit)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    // Assign ranks
+    for (i, loop_) in loops.iter_mut().take(MAX_RESULTS).enumerate() {
+        loop_.rank = (i + 1) as u8;
+    }
+
+    loops.into_iter().take(MAX_RESULTS).collect()
+}
+
+// ─── Available systems ───────────────────────────────────────────────────────
 
 pub fn available_systems() -> Vec<(u32, &'static str)> {
     AVAILABLE_SYSTEMS.to_vec()

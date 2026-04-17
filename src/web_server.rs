@@ -1,9 +1,9 @@
 //! Axum web server for Freight
 
 use crate::api::UexClient;
-use crate::calculation::{rank_routes, RouteTab};
+use crate::calculation::{compute_loop_routes, rank_routes, RouteTab};
 use crate::error::AppError;
-use crate::models::{RankedRoute, SYSTEM_ID_STANTON};
+use crate::models::{LoopRoute, RankedRoute, SYSTEM_ID_STANTON};
 use axum::{
     body::Body,
     extract::{Query, State},
@@ -47,6 +47,58 @@ struct RouteCounts {
     all: usize,
     intra_system: usize,
     interstellar: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LoopParams {
+    scu: Option<u32>,
+    system_id: Option<u32>,
+    ship_max_container: Option<u32>,
+}
+
+#[derive(serde::Serialize)]
+struct LoopsResponse {
+    loops: Vec<LoopRoute>,
+    total_fuel_estimate: f64,
+    last_updated: String,
+}
+
+/// GET /api/loops?scu=500&system_id=68
+async fn loops_handler(
+    Query(params): Query<LoopParams>,
+    State(services): State<Arc<AppServices>>,
+) -> Result<Json<LoopsResponse>, AppError> {
+    let scu = params.scu.unwrap_or(500);
+    let system_id = params.system_id.unwrap_or(SYSTEM_ID_STANTON);
+    let ship_max_container = params.ship_max_container;
+
+    let (all_routes, commodities) = tokio::join!(
+        services.client.get_routes(),
+        services.client.get_commodities()
+    );
+
+    let all_routes = all_routes?;
+    let commodities = commodities?;
+
+    let loops = compute_loop_routes(
+        &all_routes,
+        &commodities,
+        scu,
+        ship_max_container,
+        system_id,
+    );
+
+    let total_fuel_estimate: f64 = loops.iter().map(|r| r.fuel_cost).sum();
+    let last_updated = chrono::Utc::now()
+        .format("%Y-%m-%d %H:%M UTC")
+        .to_string();
+
+    Ok(Json(LoopsResponse {
+        loops,
+        total_fuel_estimate,
+        last_updated,
+    }))
 }
 
 /// GET /api/routes?scu=500&system_id=68&tab=intra
@@ -154,6 +206,7 @@ pub async fn start_web_server(client: UexClient, port: u16) {
         .route("/app.js", get(serve_app_js))
         .route("/favicon.svg", get(serve_favicon))
         .route("/api/routes", get(routes_handler))
+        .route("/api/loops", get(loops_handler))
         .layer(cors)
         .with_state(services);
 

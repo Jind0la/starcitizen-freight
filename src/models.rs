@@ -339,6 +339,65 @@ pub struct OrbitDistance {
 // Application domain models (enriched/processed)
 // ============================================================================
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoopRoute {
+    /// Rank (1 = best profit).
+    pub rank: u8,
+    /// Star rating (1-3).
+    pub stars: u8,
+    /// Commodity traded on the outbound leg (A→B).
+    pub commodity_leg1: String,
+    /// Commodity traded on the return leg (B→A).
+    pub commodity_leg2: String,
+    /// Origin terminal (A).
+    pub origin: String,
+    /// Destination terminal (B).
+    pub destination: String,
+    /// SCU capacity used (same on both legs).
+    pub scu_to_trade: u32,
+    /// Buy price on leg 1 (at origin A).
+    pub buy_price_leg1: f64,
+    /// Sell price on leg 1 (at destination B).
+    pub sell_price_leg1: f64,
+    /// Buy price on leg 2 (at destination B).
+    pub buy_price_leg2: f64,
+    /// Sell price on leg 2 (at origin A).
+    pub sell_price_leg2: f64,
+    /// Net profit of leg 1 (gross - fuel).
+    pub profit_leg1: f64,
+    /// Net profit of leg 2 (gross - fuel).
+    pub profit_leg2: f64,
+    /// Total loop net profit (leg1 + leg2).
+    pub total_profit: f64,
+    /// Profit per SCU (total_profit / scu_to_trade).
+    pub profit_per_scu: f64,
+    /// Margin % on leg 1.
+    pub margin_pct_leg1: f64,
+    /// Margin % on leg 2.
+    pub margin_pct_leg2: f64,
+    /// Combined margin % (avg of both legs).
+    pub margin_pct: f64,
+    /// Stock level at destination B (for leg 1).
+    pub stock_level: StockLevel,
+    /// Estimated hydrogen fuel cost for the full round trip (aUEC).
+    pub fuel_cost: f64,
+    /// Container sizes at destination B.
+    pub container_sizes: String,
+    /// Quantum distance in GM (outbound leg).
+    pub distance_gm: f64,
+    /// Data age of the oldest leg route.
+    pub data_age_days: Option<u32>,
+    /// Whether the origin terminal is player-owned.
+    pub is_player_owned: bool,
+    /// Whether this loop crosses star systems (Stanton ↔ Pyro).
+    pub is_interstellar: bool,
+    /// Number of quantum jumps per direction (1-2 for interstellar, 0 intra-system).
+    pub jump_count: u8,
+    /// The destination star system name (for interstellar loops).
+    pub destination_system: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum StockLevel {
     High,
