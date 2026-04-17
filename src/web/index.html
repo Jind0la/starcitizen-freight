@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Freight — SC Cargo Calculator</title>
     <link rel="stylesheet" href="styles.css">
+    <link rel="icon" type="image/svg+xml" href="favicon.svg">
 </head>
 <body>
     <div class="bg-glow"></div>
@@ -45,11 +46,11 @@
                 <label for="shipSelect">Ship</label>
                 <select id="shipSelect">
                     <option value="">— Any ship —</option>
-                    <optgroup label="Small (1–32 SCU)">
+                    <optgroup label="Small">
                         <option value="6:1">Nomad (6 SCU)</option>
                         <option value="8:1">Nostromo (8 SCU)</option>
                     </optgroup>
-                    <optgroup label="Medium (33–400 SCU)">
+                    <optgroup label="Medium">
                         <option value="66:4">Cutlass Black (66 SCU)</option>
                         <option value="120:4">Freelancer (120 SCU)</option>
                         <option value="180:8">Corsair (180 SCU)</option>
@@ -57,7 +58,7 @@
                         <option value="256:8" selected>Constellation Taurus (256 SCU)</option>
                         <option value="160:4">Valkyrie (160 SCU)</option>
                     </optgroup>
-                    <optgroup label="Large (401–2000 SCU)">
+                    <optgroup label="Large">
                         <option value="576:16">Caterpillar (576 SCU)</option>
                         <option value="288:16">Caterpillar Solo (288 SCU)</option>
                         <option value="200:4">Hull A (200 SCU)</option>
@@ -67,7 +68,7 @@
                         <option value="400:16">Starfarer (400 SCU)</option>
                         <option value="240:4">Carrack (240 SCU)</option>
                     </optgroup>
-                    <optgroup label="Extra Large (2001+ SCU)">
+                    <optgroup label="Extra Large">
                         <option value="5000:32">Cargo Bridge (5,000 SCU)</option>
                         <option value="8000:32">Cargo Platform (8,000 SCU)</option>
                         <option value="3200:32">Expanse (3,200 SCU)</option>
@@ -77,12 +78,12 @@
 
             <!-- SCU input -->
             <div class="input-group">
-                <label for="scuInput">Cargo (SCU)</label>
+                <label for="scuInput">SCU</label>
                 <div class="input-wrapper">
                     <input
                         type="number"
                         id="scuInput"
-                        placeholder="Manual SCU override"
+                        placeholder="Manual override"
                         min="1"
                         max="16000"
                     >
@@ -94,7 +95,8 @@
             <div class="input-group">
                 <label for="systemSelect">System</label>
                 <select id="systemSelect">
-                    <option value="68">Stanton</option>
+                    <option value="0">All Systems</option>
+                    <option value="68" selected>Stanton</option>
                     <option value="64">Pyro</option>
                     <option value="55">Nyx</option>
                 </select>
@@ -112,6 +114,22 @@
             </div>
         </section>
 
+        <!-- Tab Bar -->
+        <div class="tab-bar">
+            <button class="tab-btn active" data-tab="all">
+                All <span class="tab-count" id="countAll">—</span>
+            </button>
+            <button class="tab-btn" data-tab="intra">
+                Intra-System <span class="tab-count" id="countIntra">—</span>
+            </button>
+            <button class="tab-btn" data-tab="interstellar">
+                <svg class="tab-star" viewBox="0 0 16 16" fill="currentColor" width="10" height="10">
+                    <path d="M8 0l2 5h5l-4 3 1.5 5L8 10l-4.5 3L5 8 1 5h5z"/>
+                </svg>
+                Interstellar <span class="tab-count" id="countInter">—</span>
+            </button>
+        </div>
+
         <!-- Loading -->
         <div id="loading" class="loading hidden">
             <div class="spinner"></div>
@@ -127,18 +145,18 @@
             <!-- Summary bar -->
             <div class="summary-bar">
                 <div class="summary-item">
-                    <span class="summary-label">Routes shown</span>
-                    <span class="summary-value" id="routeCount">3</span>
+                    <span class="summary-label">Top routes</span>
+                    <span class="summary-value" id="routeCount">—</span>
                 </div>
                 <div class="summary-divider"></div>
                 <div class="summary-item">
-                    <span class="summary-label">Est. fuel cost</span>
-                    <span class="summary-value warning" id="fuelTotal">0</span>
+                    <span class="summary-label">Fuel est.</span>
+                    <span class="summary-value warning" id="fuelTotal">—</span>
                 </div>
                 <div class="summary-divider"></div>
                 <div class="summary-item">
-                    <span class="summary-label">Data age</span>
-                    <span class="summary-value" id="dataAge">—</span>
+                    <span class="summary-label">Tab</span>
+                    <span class="summary-value" id="tabLabel">—</span>
                 </div>
             </div>
 
@@ -152,17 +170,17 @@
                 <path d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/>
             </svg>
             <p>Select a ship or enter SCU, then calculate</p>
-            <p class="empty-hint">Top 3 profit routes will appear here</p>
+            <p class="empty-hint">Profit routes with fuel already subtracted</p>
         </section>
     </div>
 
     <!-- Footer -->
     <footer class="footer">
-        <span>Data from <a href="https://uexcorp.space" target="_blank">UEX API</a></span>
+        <span>Data: <a href="https://uexcorp.space" target="_blank">UEX API</a></span>
         <span class="sep">·</span>
-        <span>Fuel deducted from profit</span>
+        <span>Net profit = gross − quantum fuel</span>
         <span class="sep">·</span>
-        <span id="versionTag">v0.2.0</span>
+        <span id="versionTag">v0.2</span>
     </footer>
 
     <script src="app.js"></script>

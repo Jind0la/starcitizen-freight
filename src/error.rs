@@ -11,6 +11,9 @@ pub enum AppError {
     #[error("Cannot reach UEX API. Check your internet connection.")]
     ApiUnreachable,
 
+    #[error("UEX API error: {0}")]
+    ApiError(String),
+
     #[error("UEX API rate limit reached. Please wait a moment.")]
     RateLimited,
 
@@ -32,6 +35,7 @@ impl IntoResponse for AppError {
         let status = match &self {
             AppError::AuthRequired => StatusCode::UNAUTHORIZED,
             AppError::ApiUnreachable => StatusCode::SERVICE_UNAVAILABLE,
+            AppError::ApiError(_) => StatusCode::BAD_GATEWAY,
             AppError::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             AppError::InvalidResponse(_) => StatusCode::BAD_GATEWAY,
             AppError::NoRoutesFound(_) => StatusCode::NOT_FOUND,
@@ -45,6 +49,6 @@ impl IntoResponse for AppError {
 
 impl AppError {
     pub fn is_retryable(&self) -> bool {
-        matches!(self, AppError::ApiUnreachable | AppError::RateLimited)
+        matches!(self, AppError::ApiUnreachable | AppError::RateLimited | AppError::ApiError(_))
     }
 }

@@ -29,7 +29,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use crate::api::UexClient;
-use crate::calculation::rank_routes;
+use crate::calculation::{rank_routes, RouteTab};
 use crate::models::SYSTEM_ID_STANTON;
 
 #[tokio::main]
@@ -191,7 +191,7 @@ async fn refresh_routes(
     let routes = routes_result?;
     let commodities = commodities_result?;
 
-    let ranked = rank_routes(&routes, &commodities, cargo_scu, None, SYSTEM_ID_STANTON);
+    let ranked = rank_routes(&routes, &commodities, cargo_scu, None, SYSTEM_ID_STANTON, RouteTab::All, None);
     let total_fuel: f64 = ranked.iter().map(|r| r.fuel_cost).sum();
 
     app_state.cargo_scu = cargo_scu;

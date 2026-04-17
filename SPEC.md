@@ -2,11 +2,17 @@
 
 ## 1. Concept & Vision
 
-**Freight** is the anti-overwhelming cargo tool. One input — your cargo hold size — and it tells you the three most profitable trade routes right now, with fuel cost subtracted, with clear profit numbers that a human can act on in under 5 seconds at a terminal.
+**Freight** is the cargo calculator that cuts through the noise. Other tools show you dashboards, charts, 15-filter forms, and data that takes 10 minutes to parse at a terminal. Freight shows you three things: *where to buy, where to sell, how much you'll make.*
 
-No accounts. No dashboards. No 15 filters. No confusion about which price is which. Just: *I have X SCU of cargo space, what's my best move?*
+One input — your cargo hold size. One output — the three best routes right now, with fuel cost already subtracted, with a profit number you can act on in 3 seconds.
 
-The personality is confident and direct — like a seasoned freight pilot reading a data tablet. Information-dense but scannable. Dark theme because every Star Citizen player is flying at 2am anyway.
+**What makes Freight different from every other tool:**
+
+The "En Route" feature. You're flying from Crusader to Hurston anyway with 60 SCU of empty cargo space. You fire up Freight, punch in your SCU, enable "En Route", and it shows you: *there's 40 SCU of Hydrogen at ArcCorp Mining that you can grab on the way and drop at Orison for +18,000 aUEC*. This is the feature no other tool makes easy.
+
+**Interstellar routes as a first-class citizen.** Stanton→Pyro routes are real, they're profitable, and the data exists in the UEX API. But every tool hides cross-system trading behind extra clicks. Freight shows Stanton routes AND Pyro routes AND cross-system routes in one unified list, tagged clearly.
+
+The personality is confident and direct — like a seasoned freight pilot reading a data tablet. No decorative UI. No marketing language. Just data.
 
 ---
 
@@ -21,56 +27,78 @@ The personality is confident and direct — like a seasoned freight pilot readin
 - Primary text: `#E8EAED` (off-white)
 - Muted text: `#6B7280` (labels, secondary)
 - Accent green (profit): `#22C55E`
-- Accent red (loss): `#EF4444`
-- Accent amber (warning/margin): `#F59E0B`
-- Accent blue (interactive): `#3B82F6`
+- Accent red (loss/warning): `#EF4444`
+- Accent amber (margin/caution): `#F59E0B`
+- Accent blue (interactive/links): `#3B82F6`
+- Interstellar badge: `#A855F7` (purple — distinct from intra-system)
 
 **Typography:**
-- Primary: `JetBrains Mono` (monospace — cargo manifests are monospace by tradition)
+- Primary: `Exo 2` (geometric, slightly futuristic — evokes spacecraft HUD)
+- Monospace (numbers, codes): `JetBrains Mono`
 - Fallback: `Consolas`, `Monaco`, `monospace`
-- Font sizes: 11px muted labels, 13px body, 16px route headers, 24px profit numbers
+- Font sizes: 11px muted labels, 13px body, 16px route headers, 24px+ profit numbers
 
 **Spatial System:**
 - 4px base unit
 - Compact rows: 8px padding
 - Section gaps: 16px
-- Max content width: 80 chars (matches terminal width philosophy)
+- Cards: 12px padding, 6px border-radius
 
 **Motion Philosophy:**
-- Minimal. Loading spinner during API fetch. Instant result render.
-- No decorative animations — every frame serves information delivery.
+- Loading: skeleton pulse animation on route cards (not spinners)
+- Route cards: fade in with 50ms stagger between cards
+- Tab switches: cross-fade 150ms
+- No decorative animations — every frame serves information delivery
 
 ---
 
 ## 3. Layout & Structure
 
+### Web UI Layout
+
 ```
-╔══════════════════════════════════════════════════════════╗
-║  FREIGHT v0.1.0  ·  Stanton System  ·  Updated HH:MM ago ║
-╠══════════════════════════════════════════════════════════╣
-║  CARGO (SCU)  [____42____]  [CALCULATE]                  ║
-╠══════════════════════════════════════════════════════════╣
-║  #1 ★★★  ARES STAR  →  ORISON           +12,847 CR/SCU   ║
-║       Laranite    96 SCU @ buy → sell   +1,233,312 CR    ║
-║       Margin 47%  ·  Stock: HIGH         Qty: 96 SCU     ║
-╠══════════════════════════════════════════════════════════╣
-║  #2 ★★☆  HURSTON   →  AREX DRILL         +8,234 CR/SCU  ║
-║       Titanium   42 SCU @ buy → sell     +345,828 CR     ║
-║       Margin 31%  ·  Stock: MED           Qty: 42 SCU     ║
-╠══════════════════════════════════════════════════════════╣
-║  #3 ★☆☆  CELLIN    →  DAYMAR REGION     +6,102 CR/SCU  ║
-║       Diamond     8 SCU @ buy → sell      +48,816 CR      ║
-║       Margin 28%  ·  Stock: LOW           Qty: 8 SCU      ║
-╠══════════════════════════════════════════════════════════╣
-║  ⚠ Fuel est: ~2,400 CR  ·  Based on avg 3.24.x prices   ║
-╚══════════════════════════════════════════════════════════╝
+┌─────────────────────────────────────────────────────────┐
+│  ◈ FREIGHT                    Stanton ▼ | 500 SCU [▾]  │
+│  The 3-minute cargo calculator                          │
+├─────────────────────────────────────────────────────────┤
+│                                                         │
+│  [Intra-System] [Interstellar] [En Route]               │
+│                                                         │
+│  ┌───────────────────────────────────────────────────┐ │
+│  │ ★★★  #1   Iodine  ·  Stanton → Pyro  ·  ⡿ 1 jump │ │
+│  │        HUR-OUTPOST  →  Admin - Seraphim           │ │
+│  │        ─────────────────────────────────────────── │ │
+│  │   +1,833,000 aUEC          Margin: 28.2%         │ │
+│  │   500 SCU @ 9,334 → 13,000  (+3,666/SCU)         │ │
+│  │   STOCK ● LOW  ·  FUEL ⛽ ~0 CR  ·  AGE: today   │ │
+│  │   Containers: 1|2|4|8|16|24|32                    │ │
+│  └───────────────────────────────────────────────────┘ │
+│                                                         │
+│  ┌───────────────────────────────────────────────────┐ │
+│  │ ★★☆  #2   Laranite  ·  Stanton  ·  ground        │ │
+│  │        ArcCorp Mining  →  Admin - HUR-L1          │ │
+│  │        ─────────────────────────────────────────── │ │
+│  │   +1,376,431 aUEC          Margin: 28.1%         │ │
+│  │   500 SCU @ 7,047 → 9,800  (+2,752/SCU)         │ │
+│  │   STOCK ● LOW  ·  FUEL ⛽ ~2,100 CR  ·  AGE: today│ │
+│  └───────────────────────────────────────────────────┘ │
+│                                                         │
+│  ┌───────────────────────────────────────────────────┐ │
+│  │ ★☆☆  #3   Consumer Goods  ·  Stanton  ·  ground │ │
+│  │        ...                                        │ │
+│  └───────────────────────────────────────────────────┘ │
+│                                                         │
+├─────────────────────────────────────────────────────────┤
+│  ⚠ Net profit after ~2,100 CR fuel  ·  UEX data · 4.7 │
+│  Quantum fuel estimated at ~800 aUEC/SCU H₂            │
+└─────────────────────────────────────────────────────────┘
 ```
 
 **Page structure:**
-1. Header bar — version, system, last updated
-2. Input row — cargo SCU input + calculate button
-3. Results — ranked routes (max 3 shown)
-4. Footer note — fuel disclaimer + data source
+1. Header bar — logo, system selector (dropdown), SCU input
+2. Tag tabs — [Intra-System] [Interstellar] [En Route]
+3. Results — ranked route cards (max 3)
+4. Footer — fuel disclaimer, data source, game version
 
 **Responsive:** Single-column, works on mobile (375px+) and desktop. TUI via ratatui for local use.
 
@@ -78,79 +106,107 @@ The personality is confident and direct — like a seasoned freight pilot readin
 
 ## 4. Features & Interactions
 
-### Core Feature: Instant Profit Calculation
+### Core Feature: Profit Calculation
 
-**Input:** Cargo hold size in SCU (integer, 1–16000)
+**Input:**
+- Cargo hold size in SCU (integer, 1–16000)
+- System selector: Stanton (default), Pyro, Nyx
+- Tab: Intra-System | Interstellar | En Route
 
-**Process:**
-1. Fetch `/commodities_routes` with `investment` filter ≥ user's cargo value
-2. Fetch fuel prices for relevant terminals (or use cached averages)
-3. For each route:
-   - Calculate: `(sell_price - buy_price) × min(scu_available, user_scu)`
-   - Subtract estimated round-trip fuel cost
-   - Rank by profit per SCU × available SCU (total profit, not per-SCU)
-4. Return top 3 routes
+**Intra-System Tab:** Routes within a single star system (Stanton→Stanton). Shows routes from all terminals in Stanton, ranked by net profit.
+
+**Interstellar Tab:** Cross-system routes only. Stanton→Pyro, Stanton→Nyx. Shows the jump count badge, the destination system name, and includes extra quantum fuel in the profit calculation.
+
+**En Route Tab (the killer feature):** Takes current location and destination as inputs. Shows cargo opportunities along the quantum travel path. Example: flying Crusader→Hurston → shows Hydrogen available at ArcCorp Mining you can grab en route.
+
+**Processing per route:**
+1. Calculate: `(sell_price - buy_price) × min(scu_available, user_scu)`
+2. Subtract estimated round-trip quantum fuel cost
+3. For interstellar: add extra fuel for jump point traversal
+4. Rank by net profit descending
+5. Return top 3 routes
 
 **Output per route:**
-- Rank + star rating (subjective confidence: 3★ = high stock + recent data, 1★ = low stock or stale)
-- Commodity name + route origin → destination
+- Rank + star rating (confidence: 3★ = high stock + recent user data, 1★ = stale/low)
+- Commodity name + route (origin → destination)
+- System badge if cross-system (purple "STANTON → PYRO")
+- Jump count badge if interstellar (purple "⡿ 1 jump")
 - SCU to buy/sell (min of user input, stock available)
 - Buy price → Sell price
-- Total profit in CR
+- Total net profit in aUEC (fuel already subtracted)
+- Profit per SCU
 - Margin percentage
-- Stock level indicator (HIGH/MED/LOW based on scu_sell_stock)
-- Fuel estimate for the route
+- Stock level indicator (HIGH/MED/LOW)
+- Fuel estimate for the route (quantum fuel only, not hydrogen for maneuvering)
+- Data age ("today" / "2 days ago" / "1 week ago")
+- Container sizes accepted
+- Player-owned terminal indicator (★ if destination is a player outpost)
 
-### Interaction Details
+### Star Rating Logic
+
+- Base: 1 star
+- +1 star if UEX score ≥ 7.0 (algorithmic quality rating)
+- +1 star if ≥ 10 user-reported trades confirm the prices (price_origin_users_rows ≥ 10)
+- Max: 3 stars
+
+### Interactions
 
 **Calculate button:**
-- Disabled during fetch (show spinner)
+- Disabled during fetch (show skeleton pulse)
 - Disabled if input is empty or ≤ 0
-- On Enter key in input field, triggers calculate
+- Enter key in SCU input triggers calculate
 
-**Route row click/tap:**
-- Expands to show additional details: container sizes accepted, game version of data, data freshness
+**Route card click:**
+- Expands to show additional details: container sizes, fuel breakdown, data age, player-owned badge
+
+**System selector:**
+- Dropdown with Stanton, Pyro, Nyx
+- Changing system re-triggers calculation with new system routes
+
+**Tab switching:**
+- Instant filter — no API re-fetch needed (data already loaded)
+- Tab shows count badge: "Intra-System (847)" "Interstellar (22)"
 
 **Error states:**
 - API unreachable: "Cannot reach UEX API. Check your internet connection."
-- No routes found for cargo size: "No profitable routes found for X SCU. Try a smaller cargo hold or check back later."
-- API rate limit: "Rate limited by UEX API. Please wait a moment."
-- Invalid input: Inline validation message below input field
+- No routes found: "No profitable routes for X SCU. Try a smaller cargo hold."
+- Rate limited: "Rate limited by UEX API. Please wait a moment."
+- Invalid input: Inline red text below input field
 
-**Empty state:** Initial state shows placeholder text: "Enter your cargo capacity above to find the best trade routes right now."
+**Empty state:** Shows placeholder with suggested SCU values for popular ships (Cutlass Black: 66 SCU, Caterpillar: 576 SCU, Hull C: 1500 SCU).
 
 ### Data Freshness
 
-- Show "Updated X minutes ago" based on API cache headers
-- Show game version (e.g., "3.24.x") as a subline
-- Routes with >7 days of no user trade reports get a ⚠️ indicator
+- Show "Updated X minutes ago" based on when data was fetched
+- Show game version tag (e.g., "4.7")
+- Routes with >7 days since last user trade get amber "⚠ stale data" indicator
 
 ---
 
-## 5. Component Inventory
+## 5. Gap Analysis: What Freight Does That Others Don't
 
-### CargoInput
-- Text input, numeric only, placeholder "e.g. 96"
-- States: default (blue border), focused (blue glow), error (red border + message), loading (disabled)
-- "Calculate" button: default blue, hover slightly lighter, loading shows spinner, disabled grayed out
+### SC Trade Tools (sc-trade.tools)
+**Strengths:** Best-in-class UI, massive dataset, "En Route" feature concept.
+**Gaps Freight fills:**
+- No cross-system (Stanton↔Pyro) routes surfaced clearly — Freight shows them as first-class results
+- No fuel cost subtraction in displayed profit — Freight shows net profit (fuel pre-subtracted)
+- Requires configuration/filters — Freight is zero-config
+- "En Route" requires setting exact origin/destination — Freight's En Route just needs your cargo SCU
 
-### RouteCard
-- Rank badge (#1, #2, #3) with star rating
-- Commodity name (bold) + route "ORIGIN → DEST" (muted)
-- Profit per SCU: large green number, right-aligned
-- Total profit: medium text below
-- Stock indicator: pill badge (HIGH=green, MED=amber, LOW=red)
-- Expanded state: shows buy/sell prices individually, container sizes, fuel estimate, data age
+### UEX Website (uexcorp.space)
+**Strengths:** Raw data, comprehensive.
+**Gaps Freight fills:**
+- Not a calculator — just data viewer
+- Complex navigation
+- No profit ranking
+- No fuel cost calculation
 
-### StatusBar
-- Last updated timestamp
-- API status indicator (● green = live, ● amber = stale, ● red = error)
-- Game version tag
-
-### ErrorMessage
-- Red-bordered box with icon
-- Message text
-- Optional retry button
+### What Freight adds uniquely:
+1. **Net profit display** — fuel cost pre-subtracted so you see what you actually take home
+2. **Cross-system routes as first-class results** — not buried, not requiring extra API calls
+3. **Simplest possible UX** — one number, three routes, done. No filters.
+4. **Ship quick-select** — popular ships shown as one-click presets (Cutlass Black: 66 SCU, Caterpillar: 576 SCU, etc.)
+5. **Zero-configuration En Route** — doesn't ask for origin/destination, just "where can I make money on my current trip"
 
 ---
 
@@ -158,114 +214,131 @@ The personality is confident and direct — like a seasoned freight pilot readin
 
 ### Stack
 
-**Core:** Rust (no framework, vanilla Axum for optional HTTP server)
+**Core:** Rust (Axum for HTTP, Ratatui for TUI)
 
-**API Client:** reqwest with tokio runtime
+**API Client:** reqwest + tokio runtime
 
 **TUI:** ratatui + crossterm (local terminal UI)
 
-**Web UI:** minimal HTML/CSS/JS static files served by Axum
+**Web UI:** embedded HTML/CSS/JS (Axum serves via rust-embed), single-file JS, no build step
 
-**State:** No external state management. All state is local to the request or session.
-
-### Architecture
-
-```
-src/
-├── main.rs          # Entry point: chooses TUI or HTTP mode
-├── api.rs           # UEX API client (reqwest)
-├── models.rs        # Type-safe response structs
-├── calculation.rs   # Route filtering, ranking, profit math
-├── error.rs         # AppError enum
-└── cli.rs           # TUI layout and event loop (ratatui)
-
-Cargo.toml
-.env.example
-README.md
-SPEC.md
-```
+**State:** All state is local to the session. No external state management.
 
 ### API Integration
 
 **Endpoints used:**
-- `GET /commodities_routes` — pre-computed profitable routes (no auth)
-- `GET /fuel_prices` — for fuel cost estimation (no auth)
-- `GET /terminals` — for terminal metadata (no auth, cached 12h)
+- `GET /commodities_routes` (auth optional but required for full route data)
+- `GET /commodities` (no auth — for hydrogen price reference)
+- `GET /fuel_prices_all` (no auth — for hydrogen/H2 fuel prices)
+- `GET /star_systems` (no auth — for system list with live status)
 
-**Rate limit handling:** 172,800 daily / 120/min. Respect `Retry-After` headers. Cache aggressively (use API cache TTLs as cache durations).
+**Auth:** Bearer token via `UEX_API_TOKEN` env var. Required for `/commodities_routes`. Without it, routes endpoint returns limited data.
 
-**Error handling:** All API errors surface as user-friendly messages. No stack traces in CLI output.
+**Rate limits:** 172,800/day, 120/min with auth. Cache aggressively.
 
 ### Data Model
 
 ```rust
-// From API response
+// Raw API models (from UEX)
 struct Route {
     id: u32,
+    commodity_id: u32,
+    id_star_system_origin: u32,
+    id_star_system_destination: u32,
+    id_terminal_origin: u32,
+    id_terminal_destination: u32,
     commodity_name: String,
-    origin_terminal_name: String,
-    destination_terminal_name: String,
-    price_origin: f64,         // buy price per SCU
-    price_destination: f64,    // sell price per SCU
-    scu_origin: Option<f64>,   // stock available
-    scu_destination: Option<f64>,
-    scu_margin: f64,
+    origin_star_system_name: Option<String>,
+    destination_star_system_name: Option<String>,
+    terminal_origin_name: String,
+    terminal_destination_name: String,
+    terminal_origin_slug: Option<String>,
+    terminal_destination_slug: Option<String>,
+    origin_terminal_is_player_owned: Option<i32>,
+    price_origin: f64,
+    price_destination: f64,
     price_margin: f64,
     price_roi: f64,
+    scu_origin: Option<f64>,
+    scu_destination: Option<f64>,
+    status_origin: Option<i32>,
+    status_destination: Option<i32>,
     investment: f64,
     profit: f64,
-    distance: f64,             // GM
-    score: f64,
-    container_sizes_origin: String,
-    container_sizes_destination: String,
-    game_version_origin: String,
-    date_added: u64,
+    distance: Option<f64>,  // in GM
+    score: Option<f64>,
+    container_sizes_origin: Option<String>,
+    container_sizes_destination: Option<String>,
+    game_version_origin: Option<String>,
+    game_version_destination: Option<String>,
+    date_added: Option<u64>,
+}
+
+struct Commodity {
+    id: u32,
+    name: String,
+    price_sell: Option<f64>,
+    is_fuel: Option<i32>,
+    // ...
 }
 
 struct FuelPrice {
-    price_buy: f64,
+    commodity_id: u32,
+    commodity_name: String,
     terminal_name: String,
+    star_system_name: Option<String>,
+    price_buy: f64,
+    price_buy_avg: Option<f64>,
 }
 
-struct AppState {
-    cargo_scu: u32,
-    routes: Vec<RankedRoute>,
-    fuel_estimate: f64,
+struct StarSystem {
+    id: u32,
+    name: String,
+    is_available_live: Option<i32>,
 }
 
+// Enriched domain model (what the UI sees)
 struct RankedRoute {
     rank: u8,
-    stars: u8,           // 1-3
+    stars: u8,              // 1-3 confidence stars
     commodity: String,
+    commodity_slug: Option<String>,
     origin: String,
     destination: String,
     scu_to_trade: u32,
     buy_price: f64,
     sell_price: f64,
-    total_profit: f64,
+    total_profit: f64,      // net after fuel
     profit_per_scu: f64,
     margin_pct: f64,
     stock_level: StockLevel,
-    fuel_cost: f64,
+    fuel_cost: f64,         // quantum fuel only
     container_sizes: String,
+    distance_gm: f64,
+    data_age_days: Option<u32>,
+    is_player_owned: bool,
+    destination_slug: Option<String>,
+    is_interstellar: bool,  // crosses star systems
+    jump_count: u8,         // 0=intra, 1-2=interstellar
+    destination_system: Option<String>,
 }
 ```
 
 ### Caching Strategy
 
 - In-memory cache with TTL:
-  - Routes: 30 minutes (matches API cache TTL)
+  - Routes: 30 minutes
   - Fuel prices: 30 minutes
-  - Terminals: 12 hours
-- No persistent cache (app is stateless between runs)
+  - Star systems: 1 day
+- No persistent cache (stateless between runs)
 
 ### Calculation Formula
 
 ```
 For each route:
-  max_scu = min(user_cargo_scu, route.scu_available)
+  max_scu = min(user_cargo_scu, route.scu_origin)
   gross_profit = (price_destination - price_origin) × max_scu
-  fuel_cost = estimate_fuel_cost(route.distance)
+  fuel_cost = estimate_quantum_fuel(route.distance, is_interstellar)
   net_profit = gross_profit - fuel_cost
   profit_per_scu = net_profit / max_scu
   margin_pct = ((price_destination - price_origin) / price_origin) × 100
@@ -276,22 +349,60 @@ Rank by: net_profit descending
 ### Fuel Estimation
 
 ```
-// Average fuel consumption ~10 SCU Hydrogen per 100 GM (rough estimate)
-// Hydrogen avg price from API or fallback: 15 CR/SCU
-fuel_cost = (distance_gm / 100) × 10 × hydrogen_price
-round_trip_multiplier = 2.0
-total_fuel_cost = fuel_cost × 2
+// Hydrogen consumption: ~10 SCU H2 per 100 GM quantum travel
+// Hydrogen price: fetched from /fuel_prices_all or commodity list
+// Jump point traversal: +30 SCU H2 per jump
+
+hydrogen_price = fuel_prices_all.find("Hydrogen").price_buy_avg ?? 400 CR/SCU
+hydrogen_per_100gm = 10 SCU
+distance_gm = route.distance ?? 0
+fuel_cost = (distance_gm / 100) × hydrogen_per_100gm × hydrogen_price × 2 (round trip)
+if is_interstellar:
+  fuel_cost += QUANTUM_JUMP_COST (30 SCU × hydrogen_price × 2)
 ```
+
+### Known Limitations
+
+- Cross-system routes in UEX data are limited: only Stanton→Pyro commodity routes exist
+- Pyro itself has 211 terminals but no commodity_routes data for Pyro→Pyro in the API
+- Nyx has 103 terminals but no commodity_routes data
+- The `rank_interstellar_routes` function is a best-effort approach that combines intra-system sell prices from one system with buy prices from another — this is an approximation since the UEX API doesn't provide explicit cross-system routes
+- Fuel estimation uses average hydrogen price, not location-specific prices
+- En Route feature requires origin/destination inputs (not yet in v1)
 
 ---
 
 ## 7. Non-Goals (Out of Scope)
 
 - User accounts / authentication
-- Persistent history of trades
+- Persistent trade history
 - Price history charts
-- Multiple star systems (Stanton only, at least initially)
 - Ship-specific loadout optimization
 - Refinery/mining calculations
 - Mobile native apps
 - Trade alerts / notifications
+- Price prediction / trend analysis
+
+---
+
+## 8. File Structure
+
+```
+src/
+├── main.rs          # Entry: TUI or HTTP mode, dotenv loading
+├── api.rs           # UEX API client (reqwest, caching, parallel commodity fetching)
+├── models.rs        # Type-safe API response structs + RankedRoute
+├── calculation.rs   # Route filtering, ranking, fuel estimation, star rating
+├── error.rs         # AppError enum
+├── cli.rs           # Ratatui TUI layout and event loop
+├── web_server.rs    # Axum HTTP server + JSON API endpoint
+├── web_ui.rs        # rust-embed for static web assets
+web/
+├── index.html       # Web UI entry point
+├── styles.css       # Dark theme CSS
+└── app.js           # Single-file JS, no dependencies
+Cargo.toml
+.env.example
+README.md
+SPEC.md
+```

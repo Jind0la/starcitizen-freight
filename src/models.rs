@@ -191,42 +191,33 @@ pub struct Route {
 // ============================================================================
 
 #[derive(Debug, Deserialize, Clone)]
-pub struct FuelPrice {
+pub struct FuelEntry {
     pub id: u32,
     #[serde(rename = "id_commodity")]
     pub commodity_id: u32,
     #[serde(rename = "id_star_system")]
     pub star_system_id: u32,
-    #[serde(rename = "id_planet")]
-    pub planet_id: Option<u32>,
     #[serde(rename = "id_orbit")]
     pub orbit_id: Option<u32>,
     #[serde(rename = "id_terminal")]
     pub terminal_id: u32,
     pub price_buy: f64,
-    pub price_buy_min: Option<f64>,
-    pub price_buy_min_week: Option<f64>,
-    pub price_buy_min_month: Option<f64>,
-    pub price_buy_max: Option<f64>,
-    pub price_buy_max_week: Option<f64>,
-    pub price_buy_max_month: Option<f64>,
     pub price_buy_avg: Option<f64>,
-    pub price_buy_avg_week: Option<f64>,
-    pub price_buy_avg_month: Option<f64>,
     #[serde(rename = "commodity_name")]
     pub commodity_name: String,
-    #[serde(rename = "commodity_code")]
-    pub commodity_code: Option<String>,
     #[serde(rename = "star_system_name")]
     pub star_system_name: Option<String>,
-    #[serde(rename = "planet_name")]
-    pub planet_name: Option<String>,
     #[serde(rename = "orbit_name")]
     pub orbit_name: Option<String>,
     #[serde(rename = "terminal_name")]
     pub terminal_name: String,
-    #[serde(rename = "terminal_code")]
-    pub terminal_code: Option<String>,
+}
+
+impl FuelEntry {
+    /// Returns the effective hydrogen fuel price (avg if available, else spot).
+    pub fn effective_price(&self) -> f64 {
+        self.price_buy_avg.unwrap_or(self.price_buy)
+    }
 }
 
 // ============================================================================
@@ -282,13 +273,20 @@ pub struct Terminal {
 pub struct StarSystem {
     pub id: u32,
     pub name: String,
+    pub code: Option<String>,
     #[serde(rename = "is_available")]
     pub is_available: Option<i32>,
     #[serde(rename = "is_available_live")]
     pub is_available_live: Option<i32>,
+    #[serde(rename = "is_visible")]
+    pub is_visible: Option<i32>,
+    #[serde(rename = "is_default")]
+    pub is_default: Option<i32>,
+    #[serde(rename = "faction_name")]
+    pub faction_name: Option<String>,
 }
 
-// Known system IDs in UEX API
+/// Known system IDs in UEX API
 pub const SYSTEM_ID_STANTON: u32 = 68;
 pub const SYSTEM_ID_PYRO: u32 = 64;
 pub const SYSTEM_ID_NYX: u32 = 55;
@@ -297,6 +295,13 @@ pub const SYSTEM_ID_NYX: u32 = 55;
 pub const SYSTEM_NAME_STANTON: &str = "Stanton";
 pub const SYSTEM_NAME_PYRO: &str = "Pyro";
 pub const SYSTEM_NAME_NYX: &str = "Nyx";
+
+/// All star systems available in Freight (is_visible = 1 AND is_available_live = 1).
+pub const AVAILABLE_SYSTEMS: &[(u32, &str)] = &[
+    (SYSTEM_ID_STANTON, SYSTEM_NAME_STANTON),
+    (SYSTEM_ID_PYRO, SYSTEM_NAME_PYRO),
+    (SYSTEM_ID_NYX, SYSTEM_NAME_NYX),
+];
 
 // Lagrange orbit IDs that act as jump gates between Stanton ↔ Pyro
 // These appear in the orbits_distances data
@@ -334,7 +339,7 @@ pub struct OrbitDistance {
 // Application domain models (enriched/processed)
 // ============================================================================
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum StockLevel {
     High,
     Medium,
@@ -385,7 +390,8 @@ impl JumpCount {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RankedRoute {
     pub rank: u8,
     pub stars: u8,

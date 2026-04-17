@@ -1,389 +1,339 @@
-/* Freight — SC Cargo Calculator Frontend v0.2.0 */
+// Freight — Star Citizen Cargo Calculator
+// ─────────────────────────────────────────────────────────────────
 
-(function () {
-    'use strict';
+const API_BASE = '/api';
 
-    // ── DOM refs ──────────────────────────────────────────────────────────────
-    const shipSelect   = document.getElementById('shipSelect');
-    const scuInput     = document.getElementById('scuInput');
-    const systemSelect = document.getElementById('systemSelect');
-    const calcBtn      = document.getElementById('calcBtn');
-    const refreshBtn   = document.getElementById('refreshBtn');
-    const loading      = document.getElementById('loading');
-    const loadingText  = document.getElementById('loadingText');
-    const errorBox     = document.getElementById('errorBox');
-    const results      = document.getElementById('results');
-    const routesList   = document.getElementById('routesList');
-    const fuelTotal    = document.getElementById('fuelTotal');
-    const routeCount   = document.getElementById('routeCount');
-    const dataAge      = document.getElementById('dataAge');
-    const lastUpdated  = document.getElementById('lastUpdated');
-    const emptyState   = document.getElementById('emptyState');
-    const cacheDot     = document.getElementById('cacheDot');
-    const cacheLabel   = document.getElementById('cacheLabel');
+// ─── State ────────────────────────────────────────────────────────
+const state = {
+  scu: 256,
+  systemId: 68,
+  shipMaxContainer: 8,
+  minMargin: 0,
+  tab: 'all',
+  routes: [],
+  counts: { all: 0, intra_system: 0, interstellar: 0 },
+  loading: false,
+  error: null,
+  lastUpdated: null,
+};
 
-    // ── State ─────────────────────────────────────────────────────────────────
-    let cacheMs = null; // timestamp when data was loaded
+// ─── DOM refs ─────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const scuInput       = $('scuInput');
+const shipSelect     = $('shipSelect');
+const systemSelect   = $('systemSelect');
+const calcBtn        = $('calcBtn');
+const refreshBtn     = $('refreshBtn');
+const loading        = $('loading');
+const loadingText    = $('loadingText');
+const errorBox       = $('errorBox');
+const results        = $('results');
+const emptyState     = $('emptyState');
+const routesList     = $('routesList');
+const cacheDot       = $('cacheDot');
+const cacheLabel     = $('cacheLabel');
+const lastUpdated    = $('lastUpdated');
+const routeCount     = $('routeCount');
+const fuelTotal      = $('fuelTotal');
+const tabLabel       = $('tabLabel');
+const countAll       = $('countAll');
+const countIntra     = $('countIntra');
+const countInter     = $('countInter');
+const tabBtns        = document.querySelectorAll('.tab-btn');
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
-    function fmt(n, decimals = 0) {
-        return Number(n).toLocaleString('en-US', {
-            minimumFractionDigits: decimals,
-            maximumFractionDigits: decimals,
-        });
+// ─── Helpers ───────────────────────────────────────────────────────
+function fmt(n) {
+  if (n === null || n === undefined || isNaN(n)) return '—';
+  if (Math.abs(n) >= 1_000_000) return (n / 1_000_000).toFixed(2) + 'M';
+  if (Math.abs(n) >= 1_000) return (n / 1_000).toFixed(0) + 'K';
+  return n.toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+function fmtPct(n) {
+  if (!n && n !== 0) return '—';
+  return n.toFixed(1) + '%';
+}
+
+function starsHTML(n) {
+  return '★'.repeat(Math.min(n, 3));
+}
+
+function stockDot(level) {
+  // level: 0=none,1=low,2=medium,3=high
+  if (!level) return '<span class="meta-dot dot-low"></span>';
+  if (level === 1) return '<span class="meta-dot dot-low"></span>';
+  if (level === 2) return '<span class="meta-dot dot-med"></span>';
+  return '<span class="meta-dot dot-high"></span>';
+}
+
+function marginClass(pct) {
+  if (pct >= 20) return 'hi';
+  if (pct >= 8) return 'mid';
+  return 'lo';
+}
+
+// ─── Tab handling ─────────────────────────────────────────────────
+tabBtns.forEach(btn => {
+  btn.addEventListener('click', () => {
+    const t = btn.dataset.tab;
+    state.tab = t;
+    tabBtns.forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    renderRoutes(state.routes);
+  });
+});
+
+// ─── Input handlers ────────────────────────────────────────────────
+scuInput.addEventListener('input', () => {
+  const v = parseInt(scuInput.value, 10);
+  if (v > 0) state.scu = v;
+});
+
+shipSelect.addEventListener('change', () => {
+  const val = shipSelect.value;
+  if (!val) {
+    state.shipMaxContainer = null;
+  } else {
+    const parts = val.split(':');
+    state.scu = parseInt(parts[0], 10);
+    state.shipMaxContainer = parseInt(parts[1], 10);
+    // sync manual SCU input to ship value
+    scuInput.value = state.scu;
+  }
+});
+
+systemSelect.addEventListener('change', () => {
+  state.systemId = parseInt(systemSelect.value, 10);
+});
+
+calcBtn.addEventListener('click', () => calculate());
+refreshBtn.addEventListener('click', () => calculate());
+
+// Allow Enter in inputs
+scuInput.addEventListener('keydown', e => { if (e.key === 'Enter') calculate(); });
+
+// ─── API ──────────────────────────────────────────────────────────
+async function calculate() {
+  setLoading(true);
+  setError(null);
+
+  const params = new URLSearchParams({
+    scu: state.scu,
+    systemId: state.systemId || 0,
+    tab: state.tab,
+    minMargin: state.minMargin,
+  });
+  if (state.shipMaxContainer) {
+    params.set('shipMaxContainer', state.shipMaxContainer);
+  }
+
+  try {
+    const res = await fetch(`${API_BASE}/routes?${params}`);
+    if (res.status === 401 || res.status === 403) {
+      throw new Error('UEX API auth failed — check your UEX_API_TOKEN');
+    }
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`API error ${res.status}: ${text}`);
     }
 
-    function stars(score) {
-        const filled = Math.min(3, Math.max(1, Math.round(score)));
-        return Array.from({ length: 3 }, (_, i) =>
-            `<span class="star ${i < filled ? 'on' : 'off'}">★</span>`
-        ).join('');
-    }
+    const data = await res.json();
+    state.routes = data.routes || [];
+    state.counts = data.route_counts || { all: 0, intra_system: 0, interstellar: 0 };
+    state.lastUpdated = data.last_updated;
 
-    function stockBadge(level) {
-        const cls   = level?.toLowerCase() ?? 'low';
-        const label = cls.toUpperCase();
-        return `<span class="stock-badge ${cls}">${label}</span>`;
-    }
+    updateTabCounts(data.route_counts);
+    renderRoutes(state.routes);
+    setReady(data.last_updated);
+  } catch (err) {
+    setError(err.message || 'Failed to fetch routes');
+    hideResults();
+  } finally {
+    setLoading(false);
+  }
+}
 
-    function profitBar(profit, maxProfit) {
-        const isLoss = profit < 0;
-        const pct = maxProfit > 0
-            ? Math.min(100, Math.abs(profit / maxProfit) * 100)
-            : 0;
-        const cls  = isLoss ? 'loss' : '';
-        const value = isLoss
-            ? `-${fmt(Math.abs(profit))} aUEC`
-            : `+${fmt(profit)} aUEC`;
-        return `
-            <div class="profit-bar-track">
-                <div class="profit-bar-fill ${cls}" style="width:${pct}%"></div>
-            </div>
-            <div class="profit-bar-value ${cls}">${value}</div>
-        `;
-    }
+// ─── Render ───────────────────────────────────────────────────────
+function renderRoutes(routes) {
+  if (!routes || routes.length === 0) {
+    hideResults();
+    emptyState.classList.remove('hidden');
+    return;
+  }
 
-    function shipMaxContainer(shipValue) {
-        // shipValue format: "scu:maxContainer" e.g. "66:4"
-        const parts = (shipValue || '').split(':');
-        return parts.length === 2 ? parseInt(parts[1], 10) : null;
-    }
+  emptyState.classList.add('hidden');
+  results.classList.remove('hidden');
 
-    function routeCard(route, rank, maxProfit) {
-        const invest    = route.buy_price * route.scu_to_trade;
-        const containers = route.container_sizes || '';
-        const containerLabels = containers
-            .split('|')
-            .map(s => s.trim())
-            .filter(Boolean)
-            .map(s => s + ' SCU')
-            .join(' · ') || '—';
+  routeCount.textContent = routes.length;
+  fuelTotal.textContent = fmt(routes.slice(0, 10).reduce((s, r) => s + r.fuelCost, 0));
+  tabLabel.textContent = { all: 'All', intra: 'Intra', interstellar: 'Interstellar' }[state.tab] || '—';
 
-        const playerBadge = route.is_player_owned
-            ? '<span class="player-badge">Player</span>'
-            : '';
+  routesList.innerHTML = '';
 
-        const jumpBadge = route.is_interstellar
-            ? `<span class="interstellar-badge" title="Cross-system route via jump point">` +
-              `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/><path d="M2 12h20"/></svg>` +
-              ` ${route.jump_count === 1 ? '1 jump' : route.jump_count + ' jumps'}` +
-              ` · ${route.destination_system || 'Pyro'}</span>`
-            : '';
+  routes.forEach((r, i) => {
+    const card = document.createElement('div');
+    card.className = 'route-card' + (r.isInterstellar ? ' interstellar' : '');
 
-        const qlinkHref = route.destination_slug
-            ? `https://er.key4.top/e/?s=${encodeURIComponent(route.destination_slug)}`
-            : null;
-        const qlinkHTML = qlinkHref
-            ? `<a class="qlink-btn" href="${qlinkHref}" target="_blank" rel="noopener">` +
-                `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>` +
-                ` Nav »</a>`
-            : '';
+    const interBadge = r.isInterstellar
+      ? `<span class="route-system-badge badge-interstellar">Interstellar</span>`
+      : `<span class="route-system-badge badge-intra">Stanton</span>`;
 
-        return `
-        <article class="route-card">
-            <div class="route-header">
-                <div class="route-rank">
-                    <span class="rank-badge">${rank}</span>
-                    <span class="stars">${stars(route.stars)}</span>
-                    <span class="route-commodity">${route.commodity}</span>
-                    <span class="route-meta">${playerBadge}${jumpBadge}</span>
-                </div>
-                ${stockBadge(route.stock_level)}
-            </div>
+    const jumpHTML = r.isInterstellar && r.jumpCount > 0
+      ? `<span class="route-jumps">⚡ ${r.jumpCount} jump${r.jumpCount > 1 ? 's' : ''}</span>`
+      : '';
 
-            <div class="route-path">
-                <span class="path-from">${route.origin}</span>
-                <svg class="path-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-                <span class="path-to">${route.destination}</span>
-                ${route.distance_gm > 0 ? `<span class="path-distance">· ${fmt(route.distance_gm, 1)} GM</span>` : ''}
-                ${qlinkHTML}
-            </div>
+    const dataAge = r.dataAgeDays !== null ? `${r.dataAgeDays}d ago` : '—';
+    const marginCls = marginClass(r.marginPct);
 
-            <div class="route-stats">
-                <div class="stat">
-                    <span class="stat-label">SCU</span>
-                    <span class="stat-value neutral">${fmt(route.scu_to_trade)}</span>
-                </div>
-                <div class="stat">
-                    <span class="stat-label">Buy</span>
-                    <span class="stat-value buy">${fmt(route.buy_price)}</span>
-                </div>
-                <div class="stat">
-                    <span class="stat-label">Sell</span>
-                    <span class="stat-value sell">${fmt(route.sell_price)}</span>
-                </div>
-                <div class="stat">
-                    <span class="stat-label">Margin</span>
-                    <span class="stat-value neutral">${route.margin_pct.toFixed(1)}%</span>
-                </div>
-                <div class="stat">
-                    <span class="stat-label">Profit/SCU</span>
-                    <span class="stat-value profit">${fmt(route.profit_per_scu)}</span>
-                </div>
-                <div class="stat">
-                    <span class="stat-label">Invest</span>
-                    <span class="stat-value neutral">${fmt(invest)}</span>
-                </div>
-                <div class="stat">
-                    <span class="stat-label">Fuel</span>
-                    <span class="stat-value" style="color:var(--warning)">-${fmt(route.fuel_cost)}</span>
-                </div>
-                <div class="stat">
-                    <span class="stat-label">Containers</span>
-                    <span class="stat-value Containers">${containers || '—'}</span>
-                </div>
-            </div>
+    card.innerHTML = `
+      <div class="route-header" data-index="${i}">
+        <span class="route-rank">#${r.rank}</span>
+        <span class="route-stars">${starsHTML(r.stars)}</span>
+        <span class="route-commodity">${escHtml(r.commodity)}</span>
+        ${interBadge}
+        ${jumpHTML}
+      </div>
+      <div class="route-body">
+        <div class="route-terminals">
+          <span class="terminal-name">${escHtml(r.origin)}</span>
+          <span class="terminal-arrow">→</span>
+          <span class="terminal-name">${escHtml(r.destination)}</span>
+          ${r.isPlayerOwned ? '<span class="player-star">★</span>' : ''}
+        </div>
+        <div class="route-prices">
+          <span class="profit-amount">+${fmt(r.totalProfit)} aUEC</span>
+          <span class="margin-pct ${marginCls}">${fmtPct(r.marginPct)} margin</span>
+        </div>
+        <div class="route-trade">
+          <span class="trade-scu">${r.scuToTrade} SCU</span>
+          <span class="trade-arrow">·</span>
+          <span class="trade-buy">${fmt(r.buyPrice)}</span>
+          <span class="trade-arrow">→</span>
+          <span class="trade-sell">${fmt(r.sellPrice)}</span>
+        </div>
+        <div class="route-meta">
+          <span class="meta-item">
+            ${stockDot(r.stockLevel)}
+            Stock
+          </span>
+          <span class="meta-item">
+            ⛽ ${fmt(r.fuelCost)} fuel
+          </span>
+          <span class="meta-item">
+            💰 ${fmt(r.profitPerScu)}/SCU
+          </span>
+          <span class="meta-item">
+            🕐 ${dataAge}
+          </span>
+        </div>
+      </div>
+      <div class="route-expanded">
+        <div class="expanded-row">
+          <span class="expanded-label">SCU to trade</span>
+          <span class="expanded-value">${r.scuToTrade}</span>
+        </div>
+        <div class="expanded-row">
+          <span class="expanded-label">Buy price</span>
+          <span class="expanded-value">${fmt(r.buyPrice)} aUEC</span>
+        </div>
+        <div class="expanded-row">
+          <span class="expanded-label">Sell price</span>
+          <span class="expanded-value">${fmt(r.sellPrice)} aUEC</span>
+        </div>
+        <div class="expanded-row">
+          <span class="expanded-label">Gross profit</span>
+          <span class="expanded-value">${fmt(r.totalProfit + r.fuelCost)} aUEC</span>
+        </div>
+        <div class="expanded-row">
+          <span class="expanded-label">Fuel cost</span>
+          <span class="expanded-value warning">−${fmt(r.fuelCost)} aUEC</span>
+        </div>
+        <div class="expanded-row">
+          <span class="expanded-label">Net profit</span>
+          <span class="expanded-value">${fmt(r.totalProfit)} aUEC</span>
+        </div>
+        <div class="expanded-row">
+          <span class="expanded-label">Distance</span>
+          <span class="expanded-value">${r.distanceGm.toFixed(1)} GM</span>
+        </div>
+        ${r.isInterstellar ? `
+        <div class="expanded-row">
+          <span class="expanded-label">Destination system</span>
+          <span class="expanded-value">${escHtml(r.destinationSystem || '—')}</span>
+        </div>
+        <div class="expanded-row">
+          <span class="expanded-label">Quantum jumps</span>
+          <span class="expanded-value">${r.jumpCount}</span>
+        </div>` : ''}
+        <div class="expanded-row">
+          <span class="expanded-label">Container sizes</span>
+          <span class="expanded-value">${r.containerSizes || '—'}</span>
+        </div>
+      </div>
+    `;
 
-            <div class="route-profit-row">
-                <div>
-                    <div class="profit-bar-label">Net Profit (${fmt(route.scu_to_trade)} SCU)</div>
-                    ${profitBar(route.total_profit, maxProfit)}
-                </div>
-            </div>
-        </article>`;
-    }
-
-    // ── Cache status ──────────────────────────────────────────────────────────
-    function setCacheStatus(state, msg) {
-        cacheDot.className = 'cache-dot ' + state;
-        cacheLabel.textContent = msg;
-    }
-
-    function updateCacheAge() {
-        if (!cacheMs) return;
-        const ageMs   = Date.now() - cacheMs;
-        const ageMin  = Math.floor(ageMs / 60000);
-        if (ageMin < 1) {
-            setCacheStatus('live', 'Fresh');
-        } else if (ageMin < 20) {
-            setCacheStatus('stale', `${ageMin}m old`);
-        } else {
-            setCacheStatus('error', `${ageMin}m old`);
-        }
-    }
-
-    // ── URL sync ──────────────────────────────────────────────────────────────
-    function syncToURL() {
-        const scu  = scuInput.value.trim();
-        const sys  = systemSelect.value;
-        const ship = shipSelect.value;
-        const params = new URLSearchParams();
-        if (scu)       params.set('scu', scu);
-        if (sys !== '68') params.set('sys', sys);
-        if (ship)      params.set('ship', ship);
-        const search = params.toString();
-        const newUrl = search ? `${location.pathname}?${search}` : location.pathname;
-        history.replaceState(null, '', newUrl);
-    }
-
-    function loadFromURL() {
-        const params = new URLSearchParams(location.search);
-        if (params.has('scu'))  scuInput.value = params.get('scu');
-        if (params.has('sys'))  systemSelect.value = params.get('sys');
-        if (params.has('ship')) shipSelect.value = params.get('ship');
-    }
-
-    // ── API ──────────────────────────────────────────────────────────────────
-    async function fetchRoutes(scu, systemId, shipMaxContainer) {
-        const params = new URLSearchParams({ scu, system_id: systemId });
-        if (shipMaxContainer) params.set('ship_max_container', shipMaxContainer);
-        const url  = `/api/routes?${params.toString()}`;
-        const res  = await fetch(url);
-        if (!res.ok) {
-            if (res.status === 429) throw new Error('Rate limited by UEX API. Try again later.');
-            if (res.status === 400) throw new Error('Invalid SCU input (1–16000 allowed).');
-            throw new Error(`API error ${res.status}`);
-        }
-        return res.json();
-    }
-
-    // Force-refresh by bypassing client cache
-    async function refreshData() {
-        const scu    = scuInput.value.trim() || (shipSelect.value ? shipSelect.value.split(':')[0] : '');
-        if (!scu) {
-            showError('Select a ship or enter SCU first.');
-            return;
-        }
-        const systemId = systemSelect.value;
-        const shipVal  = shipSelect.value;
-        const shipMax  = shipVal ? parseInt(shipVal.split(':')[1], 10) : null;
-
-        loadingText.textContent = 'Refreshing data...';
-        loading.classList.remove('hidden');
-        results.classList.add('hidden');
-        errorBox.classList.add('hidden');
-        emptyState.classList.add('hidden');
-        calcBtn.disabled = true;
-        refreshBtn.disabled = true;
-
-        try {
-            // Bypass browser cache with timestamp
-            const ts = Date.now();
-            const params = new URLSearchParams({ scu, system_id: systemId, _t: ts });
-            if (shipMax) params.set('ship_max_container', shipMax);
-            const url = `/api/routes?${params.toString()}`;
-            const res = await fetch(url);
-            if (!res.ok) throw new Error(`API error ${res.status}`);
-            const data = await res.json();
-            render(data);
-        } catch (err) {
-            showError(err.message || 'Failed to refresh. Check your connection.');
-        } finally {
-            loading.classList.add('hidden');
-            calcBtn.disabled = false;
-            refreshBtn.disabled = false;
-        }
-    }
-
-    // ── Render ────────────────────────────────────────────────────────────────
-    function render(data) {
-        const { routes, total_fuel_estimate, last_updated, cached } = data;
-
-        cacheMs = cached ? Date.now() - (30 * 60 * 1000 - (data.cache_age_ms || 0)) : Date.now();
-        updateCacheAge();
-        if (cached) {
-            setInterval(updateCacheAge, 30000);
-        }
-
-        lastUpdated.textContent = last_updated ? `Updated ${last_updated}` : '';
-
-        if (!routes || routes.length === 0) {
-            errorBox.textContent = 'No profitable routes found for this SCU amount. Try a different ship or system.';
-            errorBox.classList.remove('hidden');
-            results.classList.add('hidden');
-            emptyState.classList.add('hidden');
-            return;
-        }
-
-        errorBox.classList.add('hidden');
-        results.classList.remove('hidden');
-        emptyState.classList.add('hidden');
-
-        fuelTotal.textContent  = fmt(total_fuel_estimate);
-        routeCount.textContent = routes.length;
-
-        // Show data age from first route
-        if (routes[0] && routes[0].data_age_days !== null && routes[0].data_age_days !== undefined) {
-            const days = routes[0].data_age_days;
-            dataAge.textContent = days === 0 ? 'Today' : `${days}d ago`;
-        } else {
-            dataAge.textContent = '—';
-        }
-
-        const maxProfit = Math.max(...routes.map(r => r.total_profit));
-        routesList.innerHTML = routes.map((r, i) =>
-            routeCard(r, i + 1, maxProfit)
-        ).join('');
-    }
-
-    function showError(msg) {
-        errorBox.textContent = msg;
-        errorBox.classList.remove('hidden');
-        results.classList.add('hidden');
-        emptyState.classList.add('hidden');
-    }
-
-    // ── Main action ────────────────────────────────────────────────────────────
-    async function calculate() {
-        // Determine SCU: ship selection overrides manual input
-        let scu, shipMax;
-        if (shipSelect.value) {
-            const parts = shipSelect.value.split(':');
-            scu     = parts[0];
-            shipMax = parseInt(parts[1], 10) || null;
-            scuInput.value = ''; // clear manual override
-        } else {
-            scu     = scuInput.value.trim();
-            shipMax = null;
-        }
-
-        if (!scu || isNaN(parseInt(scu, 10)) || parseInt(scu, 10) < 1 || parseInt(scu, 10) > 16000) {
-            showError('Enter a cargo size between 1 and 16,000 SCU.');
-            return;
-        }
-
-        const systemId = systemSelect.value;
-
-        // UI: loading state
-        loadingText.textContent = 'Fetching routes from UEX...';
-        loading.classList.remove('hidden');
-        results.classList.add('hidden');
-        errorBox.classList.add('hidden');
-        emptyState.classList.add('hidden');
-        calcBtn.disabled = true;
-        refreshBtn.disabled = true;
-
-        syncToURL();
-
-        try {
-            const data = await fetchRoutes(scu, systemId, shipMax);
-            render(data);
-        } catch (err) {
-            showError(err.message || 'Failed to fetch routes. Check your connection.');
-        } finally {
-            loading.classList.add('hidden');
-            calcBtn.disabled = false;
-            refreshBtn.disabled = false;
-        }
-    }
-
-    // ── Ship select → auto-fill SCU ──────────────────────────────────────────
-    shipSelect.addEventListener('change', () => {
-        if (shipSelect.value) {
-            const parts = shipSelect.value.split(':');
-            scuInput.placeholder = `${parts[0]} SCU (${shipSelect.options[shipSelect.selectedIndex].text.split('(')[0].trim()})`;
-            scuInput.value = '';
-        } else {
-            scuInput.placeholder = 'Manual SCU override';
-        }
+    // Click to expand
+    card.querySelector('.route-header').addEventListener('click', () => {
+      card.classList.toggle('expanded');
     });
 
-    // ── Event listeners ──────────────────────────────────────────────────────
-    calcBtn.addEventListener('click', calculate);
-    refreshBtn.addEventListener('click', refreshData);
+    routesList.appendChild(card);
+  });
+}
 
-    scuInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-            // Clear ship selection when manually entering SCU
-            shipSelect.value = '';
-            calculate();
-        }
-    });
+function escHtml(s) {
+  if (!s) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
 
-    // Allow only digit keys + backspace in the input
-    scuInput.addEventListener('keypress', (e) => {
-        if (!/[\d]/.test(e.key) && e.key !== 'Enter') {
-            e.preventDefault();
-        }
-    });
+function updateTabCounts(counts) {
+  if (!counts) return;
+  countAll.textContent   = counts.all || 0;
+  countIntra.textContent = counts.intra_system || 0;
+  countInter.textContent = counts.interstellar || 0;
+}
 
-    // ── Init ──────────────────────────────────────────────────────────────────
-    loadFromURL();
-    scuInput.focus();
+function setLoading(on) {
+  state.loading = on;
+  if (on) {
+    loading.classList.remove('hidden');
+    results.classList.add('hidden');
+    emptyState.classList.add('hidden');
+    errorBox.classList.add('hidden');
+    cacheDot.textContent = '◌';
+    cacheDot.className = 'cache-dot';
+    cacheLabel.textContent = 'Loading...';
+  } else {
+    loading.classList.add('hidden');
+  }
+}
 
-    // Auto-calculate if params in URL
-    const params = new URLSearchParams(location.search);
-    if (params.has('scu') || params.has('ship')) {
-        calculate();
-    }
-})();
+function setError(msg) {
+  if (!msg) {
+    errorBox.classList.add('hidden');
+    return;
+  }
+  errorBox.textContent = msg;
+  errorBox.classList.remove('hidden');
+}
+
+function hideResults() {
+  results.classList.add('hidden');
+  emptyState.classList.remove('hidden');
+}
+
+function setReady(ts) {
+  cacheDot.textContent = '●';
+  cacheDot.className = 'cache-dot live';
+  cacheLabel.textContent = 'Live';
+  if (ts) lastUpdated.textContent = ts;
+}
+
+// ─── Auto-load on page load ─────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', () => {
+  calculate();
+});

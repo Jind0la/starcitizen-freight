@@ -1,41 +1,51 @@
 //! Route filtering, ranking, and profit calculation logic.
+//!
+//! Fuel estimation:
+//! - Hydrogen consumption: ~10 SCU H2 per 100 GM quantum travel
+//! - Hydrogen price: fetched from API or default 400 CR/SCU
+//! - Jump point traversal: +30 SCU H2 per jump
+//!
+//! Profit formula per route:
+//!   gross_profit = (sell_price - buy_price) × min(scu_available, user_scu)
+//!   fuel_cost = estimate_quantum_fuel(distance, is_interstellar)
+//!   net_profit = gross_profit - fuel_cost
 
 use crate::models::{
-    Commodity, RankedRoute, Route, StockLevel, SYSTEM_NAME_NYX, SYSTEM_NAME_PYRO,
-    SYSTEM_NAME_STANTON, SYSTEM_ID_STANTON,
+    Commodity, RankedRoute, Route, StockLevel, AVAILABLE_SYSTEMS, SYSTEM_ID_PYRO,
+    SYSTEM_ID_STANTON, SYSTEM_NAME_PYRO, SYSTEM_NAME_STANTON,
 };
 
-/// Default hydrogen price (CR per SCU) when API data is unavailable.
-/// Real in-game price is ~700-900 aUEC per SCU Hydrogen.
-const DEFAULT_HYDROGEN_PRICE: f64 = 800.0;
+/// Hydrogen consumption: SCU H2 per 100 GM quantum travel.
+/// Real in-game is ~10 SCU/100GM for most ships.
+const SCU_H2_PER_100GM: f64 = 10.0;
 
-/// Estimated hydrogen SCU consumed per 100 GM of quantum travel.
-const FUEL_CONSUMPTION_PER_100GM: f64 = 10.0;
+/// Additional hydrogen SCU consumed per quantum jump point traversal.
+const SCU_H2_PER_JUMP: f64 = 30.0;
 
-/// Round-trip multiplier for fuel calculation.
+/// Round-trip multiplier for fuel (go there and back).
 const ROUND_TRIP_MULTIPLIER: f64 = 2.0;
+
+/// Minimum quantum fuel cost to cover QT spool etc (aUEC).
+const MIN_FUEL_COST: f64 = 200.0;
 
 /// Minimum price margin (%) to consider a route.
 const MIN_MARGIN_PCT: f64 = 5.0;
 
-/// Maximum routes to return.
-const MAX_RESULTS: usize = 3;
+/// Maximum routes to return in results.
+const MAX_RESULTS: usize = 25;
 
-/// Extra fuel cost in SCU H2 per quantum jump (jump point traversal).
-const QUANTUM_FUEL_PER_JUMP: f64 = 30.0;
-
-/// Known Lagrange orbit IDs in Stanton that connect to the Pyro jump gate.
-const STANTON_LAGRANGE_ORBITS: &[u32] = &[
+/// Known Lagrange orbit IDs in Stanton that are at jump gates to Pyro.
+/// These routes appear as Stanton→Pyro cross-system routes.
+const STANTON_JUMP_GATE_ORBITS: &[u32] = &[
+    361, // Terra Gateway
     339, // microTech Lagrange Point 1
     326, // ArcCorp Lagrange Point 1
     333, // Crusader Lagrange Point 5
-    361, // Terra Gateway
-    116, // Hurston → Pyro VI Lagrange Point 5
-    59,  // Crusader
+    398, // Stanton Gateway (Pyro side)
 ];
 
 /// Star rating thresholds.
-fn calculate_stars(route: &Route, _data_age_days: Option<u32>) -> u8 {
+fn calculate_stars(route: &Route) -> u8 {
     let mut stars = 1u8;
     if route.score.unwrap_or(0.0) >= 7.0 {
         stars += 1;
@@ -50,13 +60,17 @@ fn calculate_stars(route: &Route, _data_age_days: Option<u32>) -> u8 {
 
 /// Parse container sizes string "1|2|4|8|16|24|32" and return max size.
 fn max_container_size(sizes: &Option<String>) -> u32 {
-    match sizes {
-        Some(s) => s.split('|').filter_map(|v| v.parse::<u32>().ok()).max().unwrap_or(0),
-        None => 0,
-    }
+    sizes
+        .as_ref()
+        .and_then(|s| {
+            s.split('|')
+                .filter_map(|v| v.parse::<u32>().ok())
+                .max()
+        })
+        .unwrap_or(0)
 }
 
-/// Check container compatibility.
+/// Check container compatibility with ship's max container size.
 fn container_compatible(ship_max: u32, route_sizes: &Option<String>) -> bool {
     if ship_max == 0 {
         return false;
@@ -64,24 +78,38 @@ fn container_compatible(ship_max: u32, route_sizes: &Option<String>) -> bool {
     max_container_size(route_sizes) <= ship_max
 }
 
-/// Estimate round-trip fuel cost for a route.
-fn estimate_fuel_cost(distance_gm: Option<f64>, extra_gm: f64, hydrogen_price: f64) -> f64 {
-    let distance = distance_gm.unwrap_or(0.0) + extra_gm;
-    if distance <= 0.0 {
-        return 0.0;
-    }
-    let scu_consumed = (distance / 100.0) * FUEL_CONSUMPTION_PER_100GM;
-    scu_consumed * hydrogen_price * ROUND_TRIP_MULTIPLIER
+/// Estimate round-trip quantum fuel cost for a route in aUEC.
+/// Uses hydrogen price from commodity list.
+fn estimate_fuel_cost(
+    distance_gm: Option<f64>,
+    hydrogen_price: f64,
+    is_interstellar: bool,
+    jump_count: u8,
+) -> f64 {
+    let distance = distance_gm.unwrap_or(0.0);
+
+    // Intra-system quantum travel fuel
+    let scu_travel = (distance / 100.0) * SCU_H2_PER_100GM * ROUND_TRIP_MULTIPLIER;
+
+    // Extra fuel for jump point traversals (Stanton↔Pyro)
+    let scu_jumps = jump_count as f64 * SCU_H2_PER_JUMP * ROUND_TRIP_MULTIPLIER;
+
+    let total_scu = scu_travel + scu_jumps;
+    let cost = total_scu * hydrogen_price;
+
+    // Minimum fuel cost even for very short routes (QT spool overhead)
+    cost.max(MIN_FUEL_COST)
 }
 
-/// Find hydrogen price from commodity list.
+/// Find hydrogen commodity price from the commodity list.
+/// Falls back to default if not found.
 fn find_hydrogen_price(commodities: &[Commodity]) -> f64 {
     commodities
         .iter()
         .filter(|c| c.name.to_lowercase() == "hydrogen")
         .filter_map(|c| c.price_sell)
         .find(|&p| p > 0.0)
-        .unwrap_or(DEFAULT_HYDROGEN_PRICE)
+        .unwrap_or(400.0)
 }
 
 /// Calculate data age in days from Unix timestamp.
@@ -92,56 +120,109 @@ fn data_age_days(route: &Route) -> Option<u32> {
     })
 }
 
-/// Whether a route's origin orbit is a Lagrange/jump point connecting to Pyro.
-fn is_lagrange_jump_orbit(orbit_id: Option<u32>) -> bool {
-    orbit_id.map(|id| STANTON_LAGRANGE_ORBITS.contains(&id)).unwrap_or(false)
+/// Whether a route is cross-system (origin and destination in different systems).
+fn is_cross_system(route: &Route) -> bool {
+    route.star_system_origin_id != route.star_system_destination_id
 }
 
-/// Get the system name string for a given system ID.
-fn system_name_for_id(system_id: u32) -> &'static str {
-    match system_id {
-        68 => SYSTEM_NAME_STANTON,
-        64 => SYSTEM_NAME_PYRO,
-        55 => SYSTEM_NAME_NYX,
-        _ => SYSTEM_NAME_STANTON,
+/// Whether the origin is a known jump gate orbit (connecting Stanton↔Pyro).
+fn is_jump_gate_route(route: &Route) -> bool {
+    route.orbit_origin_id.map(|id| STANTON_JUMP_GATE_ORBITS.contains(&id)).unwrap_or(false)
+}
+
+/// Get jump count for a route.
+fn get_jump_count(route: &Route) -> u8 {
+    if is_cross_system(route) {
+        // Stanton↔Pyro is 1 jump through the gate
+        1
+    } else {
+        0
     }
 }
 
+/// Determine destination system name from route data.
+fn destination_system_name(route: &Route) -> Option<String> {
+    if is_cross_system(route) {
+        route.destination_star_system_name.clone()
+    } else {
+        None
+    }
+}
+
+// ─── Route classification ─────────────────────────────────────────────────────
+
+/// Tab/view filter for route results.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RouteTab {
+    /// All routes (intra-system + interstellar)
+    All,
+    /// Only intra-system routes (origin and destination in same system)
+    IntraSystem,
+    /// Only cross-system routes (Stanton↔Pyro etc)
+    Interstellar,
+}
+
+impl RouteTab {
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "intra" | "intra-system" => RouteTab::IntraSystem,
+            "interstellar" | "cross-system" => RouteTab::Interstellar,
+            _ => RouteTab::All,
+        }
+    }
+}
+
+/// Filter routes by tab.
+fn filter_by_tab<'a>(routes: &'a [Route], tab: RouteTab) -> Vec<&'a Route> {
+    routes
+        .iter()
+        .filter(|r| {
+            match tab {
+                RouteTab::All => true,
+                RouteTab::IntraSystem => !is_cross_system(r),
+                RouteTab::Interstellar => is_cross_system(r),
+            }
+        })
+        .collect()
+}
+
+// ─── Main ranking function ────────────────────────────────────────────────────
+
 /// Process and rank trade routes for a given cargo capacity and system.
+/// `system_id` filters origin system. Use 0 for all systems.
+/// `tab` filters by intra/interstellar.
+/// `min_margin` overrides MIN_MARGIN_PCT if provided.
 pub fn rank_routes(
     routes: &[Route],
     commodities: &[Commodity],
     cargo_scu: u32,
     ship_max_container: Option<u32>,
     system_id: u32,
+    tab: RouteTab,
+    min_margin: Option<f64>,
 ) -> Vec<RankedRoute> {
     let hydrogen_price = find_hydrogen_price(commodities);
-    let system_name = system_name_for_id(system_id);
+    let min_margin = min_margin.unwrap_or(MIN_MARGIN_PCT);
 
-    let mut ranked: Vec<RankedRoute> = routes
+    let all_filtered = routes
         .iter()
         .filter(|r| {
-            // System filter: same-system filter for Stanton/Nyx,
-            // or accept cross-system Stanton→Pyro routes when system_id is Pyro
-            let origin_sys = r.origin_star_system_name.as_deref();
-            let dest_sys = r.destination_star_system_name.as_deref();
-            match system_id {
-                64 => {
-                    // Pyro: show Pyro→Pyro intra-system AND Stanton→Pyro cross-system routes
-                    (origin_sys == Some("Pyro") && dest_sys == Some("Pyro"))
-                        || (origin_sys == Some("Stanton") && dest_sys == Some("Pyro"))
-                }
-                55 => {
-                    // Nyx: show Nyx→Nyx routes
-                    origin_sys == Some("Nyx") && dest_sys == Some("Nyx")
-                }
-                _ => {
-                    // Stanton (default): intra-system only
-                    origin_sys == Some(system_name) && dest_sys == Some(system_name)
+            // System filter
+            if system_id != 0 {
+                let origin_match = r.star_system_origin_id == system_id;
+                if !origin_match {
+                    return false;
                 }
             }
+
+            // Tab filter
+            match tab {
+                RouteTab::All => true,
+                RouteTab::IntraSystem => !is_cross_system(r),
+                RouteTab::Interstellar => is_cross_system(r),
+            }
         })
-        .filter(|r| r.price_margin > MIN_MARGIN_PCT)
+        .filter(|r| r.price_margin > min_margin)
         .filter(|r| r.scu_origin.unwrap_or(f64::MAX) >= 1.0)
         .filter(|r| {
             if let Some(max) = ship_max_container {
@@ -150,13 +231,21 @@ pub fn rank_routes(
                 true
             }
         })
-        .map(|r| {
+        .collect::<Vec<_>>();
+
+    let mut ranked: Vec<RankedRoute> = all_filtered
+        .iter()
+        .filter_map(|r| {
             let available_scu = r.scu_origin.unwrap_or(f64::MAX) as u32;
             let scu_to_trade = cargo_scu.min(available_scu).max(1);
 
             let gross_profit = (r.price_destination - r.price_origin) * scu_to_trade as f64;
-            let fuel_cost = estimate_fuel_cost(r.distance, 0.0, hydrogen_price);
+
+            let jump_count = get_jump_count(r);
+            let fuel_cost =
+                estimate_fuel_cost(r.distance, hydrogen_price, is_cross_system(r), jump_count);
             let net_profit = gross_profit - fuel_cost;
+
             let profit_per_scu = if scu_to_trade > 0 {
                 net_profit / scu_to_trade as f64
             } else {
@@ -164,12 +253,13 @@ pub fn rank_routes(
             };
 
             let is_player_owned = r.origin_terminal_is_player_owned.unwrap_or(0) == 1;
-            let is_at_lagrange = is_lagrange_jump_orbit(r.orbit_origin_id);
-            let jump_count = if is_at_lagrange { 1 } else { 0 };
+            let dest_slug = r.destination_terminal_slug.clone();
+            let is_interstellar = is_cross_system(r);
+            let dest_sys = destination_system_name(r);
 
-            RankedRoute {
+            Some(RankedRoute {
                 rank: 0,
-                stars: calculate_stars(r, data_age_days(r)),
+                stars: calculate_stars(r),
                 commodity: r.commodity_name.clone(),
                 commodity_slug: r.commodity_slug.clone(),
                 origin: r.terminal_origin_name.clone(),
@@ -182,132 +272,29 @@ pub fn rank_routes(
                 margin_pct: r.price_margin,
                 stock_level: StockLevel::from_status(r.status_destination),
                 fuel_cost,
-                container_sizes: r.container_sizes_destination.clone().unwrap_or_default(),
-                distance_gm: r.distance.unwrap_or(0.0),
-                data_age_days: data_age_days(r),
-                is_player_owned,
-                destination_slug: r.destination_terminal_slug.clone(),
-                is_interstellar: is_at_lagrange,
-                jump_count,
-                destination_system: if is_at_lagrange {
-                    Some("Pyro".to_string())
-                } else {
-                    None
-                },
-            }
-        })
-        .collect();
-
-    ranked.sort_by(|a, b| {
-        b.total_profit
-            .partial_cmp(&a.total_profit)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    for (i, route) in ranked.iter_mut().take(MAX_RESULTS).enumerate() {
-        route.rank = (i + 1) as u8;
-    }
-
-    ranked.into_iter().take(MAX_RESULTS).collect()
-}
-
-/// Process cross-system (interstellar) routes: buy in one system, sell in another.
-/// Combines routes from origin and destination systems.
-pub fn rank_interstellar_routes(
-    routes_origin: &[Route],
-    routes_dest: &[Route],
-    commodities: &[Commodity],
-    cargo_scu: u32,
-    ship_max_container: Option<u32>,
-    _system_id: u32,
-) -> Vec<RankedRoute> {
-    let hydrogen_price = find_hydrogen_price(commodities);
-
-    // Build a map of commodity_id → best sell price in destination system
-    let dest_prices: std::collections::HashMap<u32, &Route> = routes_dest
-        .iter()
-        .fold(std::collections::HashMap::new(), |mut acc, r| {
-            acc.entry(r.commodity_id).or_insert(r);
-            acc
-        });
-
-    let mut ranked: Vec<RankedRoute> = routes_origin
-        .iter()
-        .filter(|r| {
-            // Only origin routes that are in a different system than Stanton
-            r.origin_star_system_name.as_deref() != Some(SYSTEM_NAME_STANTON)
-        })
-        .filter(|r| r.price_margin > MIN_MARGIN_PCT)
-        .filter(|r| r.scu_origin.unwrap_or(f64::MAX) >= 1.0)
-        .filter(|r| {
-            if let Some(max) = ship_max_container {
-                container_compatible(max, &r.container_sizes_destination)
-            } else {
-                true
-            }
-        })
-        .filter_map(|r| {
-            let dest_route = dest_prices.get(&r.commodity_id)?;
-            let available_scu = r.scu_origin.unwrap_or(f64::MAX) as u32;
-            let scu_to_trade = cargo_scu.min(available_scu).max(1);
-
-            let buy_price = r.price_origin;
-            let sell_price = dest_route.price_destination;
-
-            let gross_profit = (sell_price - buy_price) * scu_to_trade as f64;
-            // Extra fuel for the quantum jump (round trip)
-            let extra_fuel_gm = QUANTUM_FUEL_PER_JUMP * 2.0;
-            let fuel_cost = estimate_fuel_cost(r.distance, extra_fuel_gm, hydrogen_price);
-            let net_profit = gross_profit - fuel_cost;
-            let profit_per_scu = if scu_to_trade > 0 {
-                net_profit / scu_to_trade as f64
-            } else {
-                0.0
-            };
-            let margin_pct = if buy_price > 0.0 {
-                ((sell_price - buy_price) / buy_price) * 100.0
-            } else {
-                0.0
-            };
-            let is_player_owned = r.origin_terminal_is_player_owned.unwrap_or(0) == 1;
-            let dest_sys_name = r.destination_star_system_name.clone().unwrap_or_else(|| "Pyro".to_string());
-
-            Some(RankedRoute {
-                rank: 0,
-                stars: calculate_stars(r, data_age_days(r)),
-                commodity: r.commodity_name.clone(),
-                commodity_slug: r.commodity_slug.clone(),
-                origin: r.terminal_origin_name.clone(),
-                destination: dest_route.terminal_destination_name.clone(),
-                scu_to_trade,
-                buy_price,
-                sell_price,
-                total_profit: net_profit,
-                profit_per_scu,
-                margin_pct,
-                stock_level: StockLevel::from_status(dest_route.status_destination),
-                fuel_cost,
-                container_sizes: dest_route
+                container_sizes: r
                     .container_sizes_destination
                     .clone()
                     .unwrap_or_default(),
                 distance_gm: r.distance.unwrap_or(0.0),
                 data_age_days: data_age_days(r),
                 is_player_owned,
-                destination_slug: dest_route.destination_terminal_slug.clone(),
-                is_interstellar: true,
-                jump_count: 1,
-                destination_system: Some(dest_sys_name),
+                destination_slug: dest_slug,
+                is_interstellar,
+                jump_count,
+                destination_system: dest_sys,
             })
         })
         .collect();
 
+    // Sort by net profit descending
     ranked.sort_by(|a, b| {
         b.total_profit
             .partial_cmp(&a.total_profit)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
+    // Assign ranks
     for (i, route) in ranked.iter_mut().take(MAX_RESULTS).enumerate() {
         route.rank = (i + 1) as u8;
     }
@@ -315,12 +302,213 @@ pub fn rank_interstellar_routes(
     ranked.into_iter().take(MAX_RESULTS).collect()
 }
 
+/// Compute cross-system (interstellar) route profit.
+/// This combines a buy route in one system with a sell route in another system
+/// to compute the actual profit of Stanton→Pyro (or Pyro→Stanton) runs.
+pub fn compute_interstellar_profit(
+    routes_all: &[Route],
+    commodities: &[Commodity],
+    cargo_scu: u32,
+    hydrogen_price: f64,
+) -> Vec<RankedRoute> {
+    // Find Stanton→Pyro routes (origin Stanton, dest Pyro)
+    let stanton_routes: Vec<_> = routes_all
+        .iter()
+        .filter(|r| {
+            r.star_system_origin_id == SYSTEM_ID_STANTON
+                && r.star_system_destination_id == SYSTEM_ID_PYRO
+        })
+        .collect();
+
+    // Find Pyro→Stanton routes
+    let pyro_routes: Vec<_> = routes_all
+        .iter()
+        .filter(|r| {
+            r.star_system_origin_id == SYSTEM_ID_PYRO
+                && r.star_system_destination_id == SYSTEM_ID_STANTON
+        })
+        .collect();
+
+    // Build sell-price lookup per commodity in each destination system
+    // For Stanton→Pyro: buy in Stanton (stanton_routes), sell at Pyro terminals
+    // We need Pyro sell prices per commodity
+    let mut pyro_sell_prices: std::collections::HashMap<u32, &Route> =
+        std::collections::HashMap::new();
+    for r in routes_all.iter().filter(|r| r.star_system_destination_id == SYSTEM_ID_PYRO) {
+        pyro_sell_prices
+            .entry(r.commodity_id)
+            .or_insert_with(|| r);
+    }
+
+    // For Pyro→Stanton: sell in Stanton
+    let mut stanton_sell_prices: std::collections::HashMap<u32, &Route> =
+        std::collections::HashMap::new();
+    for r in routes_all
+        .iter()
+        .filter(|r| r.star_system_destination_id == SYSTEM_ID_STANTON)
+    {
+        stanton_sell_prices
+            .entry(r.commodity_id)
+            .or_insert_with(|| r);
+    }
+
+    let mut results = Vec::new();
+
+    // Stanton → Pyro (buy Stanton, sell Pyro)
+    for buy_route in &stanton_routes {
+        if buy_route.price_margin <= MIN_MARGIN_PCT {
+            continue;
+        }
+        if buy_route.scu_origin.unwrap_or(f64::MAX) < 1.0 {
+            continue;
+        }
+
+        // Find sell price in Pyro for same commodity
+        let Some(sell_route) = pyro_sell_prices.get(&buy_route.commodity_id) else {
+            continue;
+        };
+
+        let available_scu = buy_route.scu_origin.unwrap_or(f64::MAX) as u32;
+        let scu_to_trade = cargo_scu.min(available_scu).max(1);
+
+        let buy_price = buy_route.price_origin;
+        let sell_price = sell_route.price_destination;
+        let gross_profit = (sell_price - buy_price) * scu_to_trade as f64;
+
+        // 1 jump Stanton→Pyro, round trip
+        let fuel_cost = estimate_fuel_cost(
+            buy_route.distance,
+            hydrogen_price,
+            true,
+            1,
+        );
+        let net_profit = gross_profit - fuel_cost;
+        let profit_per_scu = if scu_to_trade > 0 {
+            net_profit / scu_to_trade as f64
+        } else {
+            0.0
+        };
+
+        let margin_pct = if buy_price > 0.0 {
+            ((sell_price - buy_price) / buy_price) * 100.0
+        } else {
+            0.0
+        };
+
+        results.push(RankedRoute {
+            rank: 0,
+            stars: calculate_stars(buy_route),
+            commodity: buy_route.commodity_name.clone(),
+            commodity_slug: buy_route.commodity_slug.clone(),
+            origin: buy_route.terminal_origin_name.clone(),
+            destination: sell_route.terminal_destination_name.clone(),
+            scu_to_trade,
+            buy_price,
+            sell_price,
+            total_profit: net_profit,
+            profit_per_scu,
+            margin_pct,
+            stock_level: StockLevel::from_status(sell_route.status_destination),
+            fuel_cost,
+            container_sizes: sell_route
+                .container_sizes_destination
+                .clone()
+                .unwrap_or_default(),
+            distance_gm: buy_route.distance.unwrap_or(0.0),
+            data_age_days: data_age_days(buy_route),
+            is_player_owned: buy_route.origin_terminal_is_player_owned.unwrap_or(0) == 1,
+            destination_slug: sell_route.destination_terminal_slug.clone(),
+            is_interstellar: true,
+            jump_count: 1,
+            destination_system: Some("Pyro".to_string()),
+        });
+    }
+
+    // Pyro → Stanton (buy Pyro, sell Stanton)
+    for buy_route in &pyro_routes {
+        if buy_route.price_margin <= MIN_MARGIN_PCT {
+            continue;
+        }
+        if buy_route.scu_origin.unwrap_or(f64::MAX) < 1.0 {
+            continue;
+        }
+
+        let Some(sell_route) = stanton_sell_prices.get(&buy_route.commodity_id) else {
+            continue;
+        };
+
+        let available_scu = buy_route.scu_origin.unwrap_or(f64::MAX) as u32;
+        let scu_to_trade = cargo_scu.min(available_scu).max(1);
+
+        let buy_price = buy_route.price_origin;
+        let sell_price = sell_route.price_destination;
+        let gross_profit = (sell_price - buy_price) * scu_to_trade as f64;
+
+        // 1 jump Pyro→Stanton, round trip
+        let fuel_cost = estimate_fuel_cost(
+            buy_route.distance,
+            hydrogen_price,
+            true,
+            1,
+        );
+        let net_profit = gross_profit - fuel_cost;
+        let profit_per_scu = if scu_to_trade > 0 {
+            net_profit / scu_to_trade as f64
+        } else {
+            0.0
+        };
+
+        let margin_pct = if buy_price > 0.0 {
+            ((sell_price - buy_price) / buy_price) * 100.0
+        } else {
+            0.0
+        };
+
+        results.push(RankedRoute {
+            rank: 0,
+            stars: calculate_stars(buy_route),
+            commodity: buy_route.commodity_name.clone(),
+            commodity_slug: buy_route.commodity_slug.clone(),
+            origin: buy_route.terminal_origin_name.clone(),
+            destination: sell_route.terminal_destination_name.clone(),
+            scu_to_trade,
+            buy_price,
+            sell_price,
+            total_profit: net_profit,
+            profit_per_scu,
+            margin_pct,
+            stock_level: StockLevel::from_status(sell_route.status_destination),
+            fuel_cost,
+            container_sizes: sell_route
+                .container_sizes_destination
+                .clone()
+                .unwrap_or_default(),
+            distance_gm: buy_route.distance.unwrap_or(0.0),
+            data_age_days: data_age_days(buy_route),
+            is_player_owned: buy_route.origin_terminal_is_player_owned.unwrap_or(0) == 1,
+            destination_slug: sell_route.destination_terminal_slug.clone(),
+            is_interstellar: true,
+            jump_count: 1,
+            destination_system: Some("Stanton".to_string()),
+        });
+    }
+
+    // Sort and rank
+    results.sort_by(|a, b| {
+        b.total_profit
+            .partial_cmp(&a.total_profit)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    for (i, route) in results.iter_mut().take(MAX_RESULTS).enumerate() {
+        route.rank = (i + 1) as u8;
+    }
+
+    results.into_iter().take(MAX_RESULTS).collect()
+}
+
 pub fn available_systems() -> Vec<(u32, &'static str)> {
-    vec![
-        (SYSTEM_ID_STANTON, SYSTEM_NAME_STANTON),
-        (64, SYSTEM_NAME_PYRO),
-        (55, SYSTEM_NAME_NYX),
-    ]
+    AVAILABLE_SYSTEMS.to_vec()
 }
 
 #[cfg(test)]
@@ -347,12 +535,19 @@ mod tests {
         }
     }
 
-    fn make_route(price_origin: f64, price_destination: f64, scu_origin: f64, score: f64, system: &str) -> Route {
+    fn make_route(
+        price_origin: f64,
+        price_destination: f64,
+        scu_origin: f64,
+        score: f64,
+        system_origin: u32,
+        system_dest: u32,
+    ) -> Route {
         Route {
             id: 1,
             commodity_id: 1,
-            star_system_origin_id: 68,
-            star_system_destination_id: 68,
+            star_system_origin_id: system_origin,
+            star_system_destination_id: system_dest,
             planet_origin_id: Some(1),
             planet_destination_id: Some(1),
             orbit_origin_id: Some(1),
@@ -409,7 +604,7 @@ mod tests {
             commodity_name: "Laranite".into(),
             commodity_code: Some("LAR".into()),
             commodity_slug: Some("laranite".into()),
-            origin_star_system_name: Some(system.into()),
+            origin_star_system_name: Some("Stanton".into()),
             origin_planet_name: Some("Hurston".into()),
             origin_orbit_name: None,
             terminal_origin_name: "HURSTON".into(),
@@ -417,16 +612,16 @@ mod tests {
             terminal_origin_slug: Some("hurston".into()),
             origin_terminal_is_player_owned: Some(0),
             origin_faction_name: Some("UEE".into()),
-            destination_star_system_name: Some(system.into()),
+            destination_star_system_name: Some("Stanton".into()),
             destination_planet_name: Some("MicroTech".into()),
             destination_orbit_name: None,
             terminal_destination_name: "ORISON".into(),
-            terminal_destination_code: Some("ORI".into()),
-            terminal_destination_slug: Some("orison".into()),
+            destination_terminal_code: Some("ORI".into()),
+            destination_terminal_slug: Some("orison".into()),
             destination_terminal_is_player_owned: Some(0),
             destination_faction_name: Some("UEE".into()),
-            game_version_origin: Some("3.24".into()),
-            game_version_destination: Some("3.24".into()),
+            game_version_origin: Some("4.7".into()),
+            game_version_destination: Some("4.7".into()),
             date_added: Some(chrono::Utc::now().timestamp() as u64 - 86400),
         }
     }
@@ -434,13 +629,14 @@ mod tests {
     #[test]
     fn test_rank_routes_high_profit_first() {
         let routes = vec![
-            make_route(100.0, 110.0, 96.0, 5.0, SYSTEM_NAME_STANTON),
-            make_route(100.0, 150.0, 96.0, 8.0, SYSTEM_NAME_STANTON),
-            make_route(100.0, 115.0, 96.0, 3.0, SYSTEM_NAME_STANTON),
+            make_route(100.0, 110.0, 96.0, 5.0, 68, 68),
+            make_route(100.0, 150.0, 96.0, 8.0, 68, 68),
+            make_route(100.0, 115.0, 96.0, 3.0, 68, 68),
         ];
         let commodities = vec![make_commodity(41, "Hydrogen", 800.0)];
 
-        let ranked = rank_routes(&routes, &commodities, 96, None, SYSTEM_ID_STANTON);
+        let ranked =
+            rank_routes(&routes, &commodities, 96, None, 0, RouteTab::IntraSystem, None);
 
         assert_eq!(ranked.len(), 3);
         assert_eq!(ranked[0].commodity, "Laranite");
@@ -449,41 +645,72 @@ mod tests {
 
     #[test]
     fn test_fuel_cost_subtracted() {
-        let route = make_route(100.0, 200.0, 96.0, 8.0, SYSTEM_NAME_STANTON);
+        let route = make_route(100.0, 200.0, 96.0, 8.0, 68, 68);
         let commodities = vec![make_commodity(41, "Hydrogen", 800.0)];
 
-        let ranked = rank_routes(&[route], &commodities, 96, None, SYSTEM_ID_STANTON);
+        let ranked =
+            rank_routes(&routes, &commodities, 96, None, 0, RouteTab::IntraSystem, None);
 
         assert_eq!(ranked.len(), 1);
-        assert!(ranked[0].total_profit < 9600.0);
+        assert!(ranked[0].total_profit < 9600.0); // fuel is subtracted
     }
 
     #[test]
     fn test_low_margin_filtered_out() {
-        let mut route = make_route(100.0, 102.0, 96.0, 5.0, SYSTEM_NAME_STANTON);
+        let mut route = make_route(100.0, 102.0, 96.0, 5.0, 68, 68);
         route.price_margin = 2.0;
         let commodities = vec![make_commodity(41, "Hydrogen", 800.0)];
 
-        let ranked = rank_routes(&[route], &commodities, 96, None, SYSTEM_ID_STANTON);
+        let ranked =
+            rank_routes(&[route], &commodities, 96, None, 0, RouteTab::IntraSystem, None);
 
         assert_eq!(ranked.len(), 0);
     }
 
     #[test]
-    fn test_system_filter() {
-        let stanton_route = make_route(100.0, 150.0, 96.0, 8.0, SYSTEM_NAME_STANTON);
-        let pyro_route = make_route(100.0, 150.0, 96.0, 8.0, SYSTEM_NAME_PYRO);
+    fn test_intra_system_filter() {
+        let stanton = make_route(100.0, 150.0, 96.0, 8.0, 68, 68);
+        let pyro = make_route(100.0, 150.0, 96.0, 8.0, 64, 64);
         let commodities = vec![make_commodity(41, "Hydrogen", 800.0)];
 
+        let ranked =
+            rank_routes(&[stanton, pyro], &commodities, 96, None, 68, RouteTab::IntraSystem, None);
+
+        assert_eq!(ranked.len(), 1);
+    }
+
+    #[test]
+    fn test_interstellar_filter() {
+        let stanton_to_pyro =
+            make_route(100.0, 150.0, 96.0, 8.0, 68, 64); // Stanton→Pyro
+        let pyro_to_stanton =
+            make_route(100.0, 150.0, 96.0, 8.0, 64, 68); // Pyro→Stanton
+        let intra_stanton = make_route(100.0, 150.0, 96.0, 8.0, 68, 68);
+        let commodities = vec![make_commodity(41, "Hydrogen", 800.0)];
+
+        // All routes, interstellar tab
         let ranked = rank_routes(
-            &[stanton_route, pyro_route],
+            &[stanton_to_pyro, pyro_to_stanton, intra_stanton],
             &commodities,
             96,
             None,
-            SYSTEM_ID_STANTON,
+            0,
+            RouteTab::Interstellar,
+            None,
         );
 
-        // Only Stanton routes should appear
-        assert_eq!(ranked.len(), 1);
+        assert_eq!(ranked.len(), 2); // Both cross-system
+        assert!(ranked.iter().all(|r| r.is_interstellar));
+    }
+
+    #[test]
+    fn test_is_cross_system() {
+        let stanton_intra = make_route(100.0, 150.0, 96.0, 8.0, 68, 68);
+        let stanton_pyro = make_route(100.0, 150.0, 96.0, 8.0, 68, 64);
+        let pyro_stanton = make_route(100.0, 150.0, 96.0, 8.0, 64, 68);
+
+        assert!(!is_cross_system(&stanton_intra));
+        assert!(is_cross_system(&stanton_pyro));
+        assert!(is_cross_system(&pyro_stanton));
     }
 }

@@ -1,13 +1,13 @@
 //! UEX API 2.0 client for Freight
 //!
 //! Base URL: https://api.uexcorp.space/2.0/
-//! Auth: Bearer token REQUIRED for /commodities_routes
-//! Rate limit: 172,800/day or 120/min (with auth)
+//! Auth: Bearer token via UEX_API_TOKEN env var (required for routes).
+//! Rate limit: 172,800/day or 120/min with auth.
 
 use std::time::{Duration, Instant};
 
 use crate::error::AppError;
-use crate::models::{ApiResponse, Commodity, Route, Terminal};
+use crate::models::{ApiResponse, Commodity, FuelEntry, Route, StarSystem};
 use reqwest::Client;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -28,7 +28,8 @@ impl<T> CacheEntry<T> {
 struct ApiCache {
     routes: RwLock<Option<CacheEntry<Vec<Route>>>>,
     commodities: RwLock<Option<CacheEntry<Vec<Commodity>>>>,
-    terminals: RwLock<Option<CacheEntry<Vec<Terminal>>>>,
+    fuel_prices: RwLock<Option<CacheEntry<Vec<FuelEntry>>>>,
+    star_systems: RwLock<Option<CacheEntry<Vec<StarSystem>>>>,
 }
 
 impl Default for ApiCache {
@@ -36,7 +37,8 @@ impl Default for ApiCache {
         Self {
             routes: RwLock::new(None),
             commodities: RwLock::new(None),
-            terminals: RwLock::new(None),
+            fuel_prices: RwLock::new(None),
+            star_systems: RwLock::new(None),
         }
     }
 }
@@ -51,202 +53,251 @@ pub struct UexClient {
 }
 
 impl UexClient {
+    /// Create a new UEX API client.
+    /// If `token` is None, reads UEX_API_TOKEN from the environment.
     pub fn new(token: Option<String>) -> Self {
         let client = Client::builder()
-            .timeout(Duration::from_secs(20))
-            .user_agent("Freight/0.2.0 (Star Citizen Cargo Calculator)")
+            .timeout(Duration::from_secs(30))
             .build()
-            .expect("reqwest client must build");
+            .expect("reqwest client");
 
         Self {
             client,
             base_url: "https://api.uexcorp.space/2.0".to_string(),
-            token,
+            token: token.or_else(|| std::env::var("UEX_API_TOKEN").ok()),
             cache: Arc::new(ApiCache::default()),
         }
     }
 
-    fn build_request(&self, url: &str) -> reqwest::RequestBuilder {
-        let mut rb = self.client.get(url);
-        if let Some(token) = &self.token {
-            rb = rb.header("Authorization", format!("Bearer {token}"));
-        }
-        rb
+    /// Build request URL
+    fn url(&self, path: &str) -> String {
+        format!("{}{}", self.base_url, path)
     }
 
-    // ------------------------------------------------------------------------
-    // Commodities (needed for hydrogen price lookup)
-    // ------------------------------------------------------------------------
+    /// Fetch JSON from a path, handling the {status, data} envelope.
+    async fn fetch<T: for<'de> serde::Deserialize<'de>>(
+        &self,
+        path: &str,
+    ) -> Result<T, AppError> {
+        let url = self.url(path);
+        let mut req = self.client.get(&url).header("User-Agent", "Freight/1.0");
 
-    /// Fetch all commodities. No auth required.
-    /// Cached for 1 hour.
-    pub async fn get_commodities(&self) -> Result<Vec<Commodity>, AppError> {
+        if let Some(token) = &self.token {
+            req = req.header("Authorization", format!("Bearer {token}"));
+        }
+
+        let resp = req.send().await?;
+        let status = resp.status();
+
+        if status.as_u16() == 401 || status.as_u16() == 403 {
+            return Err(AppError::AuthRequired);
+        }
+        if status.as_u16() == 429 {
+            return Err(AppError::RateLimited);
+        }
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(AppError::ApiError(format!(
+                "API error {}: {}",
+                status.as_u16(),
+                text
+            )));
+        }
+
+        // All UEX API responses follow {status: "ok", data: ...}
+        #[derive(serde::Deserialize)]
+        struct Envelope<T> {
+            status: String,
+            data: T,
+        }
+        let envelope: Envelope<T> = resp.json().await?;
+        if envelope.status != "ok" {
+            return Err(AppError::ApiError(format!("API status: {}", envelope.status)));
+        }
+        Ok(envelope.data)
+    }
+
+    // ─── Public API Methods ─────────────────────────────────────────────────
+
+    /// Fetch all available star systems (no auth required).
+    pub async fn get_star_systems(&self) -> Result<Vec<StarSystem>, AppError> {
+        // Check cache first (1 day TTL)
         {
-            let cache = self.cache.commodities.read().await;
-            if let Some(entry) = &*cache {
+            let cache = self.cache.star_systems.read().await;
+            if let Some(entry) = cache.as_ref() {
                 if !entry.is_expired() {
+                    tracing::debug!("star_systems: cache hit");
                     return Ok(entry.data.clone());
                 }
             }
         }
 
-        let url = format!("{}/commodities", self.base_url);
-        let response = self.build_request(&url).send().await
-            .map_err(|_| AppError::ApiUnreachable)?;
+        let systems: Vec<StarSystem> = self.fetch("/star_systems").await?;
 
-        if response.status() == 429 {
-            return Err(AppError::RateLimited);
+        {
+            let mut cache = self.cache.star_systems.write().await;
+            *cache = Some(CacheEntry {
+                data: systems.clone(),
+                expires_at: Instant::now() + Duration::from_secs(86400), // 1 day
+            });
         }
 
-        let parsed: ApiResponse<Vec<Commodity>> = response.json().await
-            .map_err(|_| AppError::InvalidResponse("Failed to parse commodities response".into()))?;
+        Ok(systems)
+    }
 
-        if parsed.status != "ok" {
-            return Err(AppError::InvalidResponse(parsed.status));
+    /// Fetch hydrogen fuel prices (no auth required).
+    /// Commodity ID 104 = Hydrogen Fuel.
+    pub async fn get_fuel_prices(&self) -> Result<Vec<FuelEntry>, AppError> {
+        // Check cache first (30 min TTL)
+        {
+            let cache = self.cache.fuel_prices.read().await;
+            if let Some(entry) = cache.as_ref() {
+                if !entry.is_expired() {
+                    tracing::debug!("fuel_prices: cache hit");
+                    return Ok(entry.data.clone());
+                }
+            }
         }
 
-        let data = parsed.data;
+        // Fetch hydrogen fuel prices (id_commodity=104)
+        let prices: Vec<FuelEntry> = self
+            .fetch("/fuel_prices?id_commodity=104")
+            .await
+            .inspect_err(|e| tracing::warn!("fuel_prices fetch failed: {e}"))
+            .unwrap_or_default();
+
+        {
+            let mut cache = self.cache.fuel_prices.write().await;
+            *cache = Some(CacheEntry {
+                data: prices.clone(),
+                expires_at: Instant::now() + Duration::from_secs(1800), // 30 min
+            });
+        }
+
+        Ok(prices)
+    }
+
+    /// Fetch all commodities (no auth required).
+    pub async fn get_commodities(&self) -> Result<Vec<Commodity>, AppError> {
+        // Check cache first (30 min TTL)
+        {
+            let cache = self.cache.commodities.read().await;
+            if let Some(entry) = cache.as_ref() {
+                if !entry.is_expired() {
+                    tracing::debug!("commodities: cache hit");
+                    return Ok(entry.data.clone());
+                }
+            }
+        }
+
+        let commodities: Vec<Commodity> = self.fetch("/commodities").await?;
 
         {
             let mut cache = self.cache.commodities.write().await;
             *cache = Some(CacheEntry {
-                data: data.clone(),
-                expires_at: Instant::now() + Duration::from_secs(60 * 60),
+                data: commodities.clone(),
+                expires_at: Instant::now() + Duration::from_secs(1800), // 30 min
             });
         }
 
-        Ok(data)
+        Ok(commodities)
     }
 
-    // ------------------------------------------------------------------------
-    // Routes
-    // ------------------------------------------------------------------------
-
-    /// Fetch all commodity routes from UEX API.
-    /// Requires auth — fetches routes per-commodity (API requires at least one filter param).
-    /// Cached for 30 minutes.
+    /// Fetch ALL commodity routes by iterating over all commodity IDs.
+    /// This is needed because /commodities_routes requires at least one
+    /// commodity filter and there's no "get all routes" endpoint.
+    ///
+    /// We fetch commodities first (cached), then fan out parallel requests
+    /// for each commodity's routes, merging them together.
     pub async fn get_routes(&self) -> Result<Vec<Route>, AppError> {
+        // Check cache first (30 min TTL)
         {
             let cache = self.cache.routes.read().await;
-            if let Some(entry) = &*cache {
+            if let Some(entry) = cache.as_ref() {
                 if !entry.is_expired() {
+                    tracing::debug!("routes: cache hit");
                     return Ok(entry.data.clone());
                 }
             }
         }
 
-        let token = self.token.as_ref()
-            .ok_or(AppError::AuthRequired)?;
-
-        // Step 1: Get all commodities to enumerate IDs
+        // Fetch commodities to get IDs
         let commodities = self.get_commodities().await?;
         let commodity_ids: Vec<u32> = commodities.iter().map(|c| c.id).collect();
-        let num_commodities = commodity_ids.len();
+        tracing::info!(
+            "fetching routes for {} commodities (parallel)",
+            commodity_ids.len()
+        );
 
-        // Step 2: Fetch routes for each commodity
-        let mut all_routes = Vec::new();
-        let client = &self.client;
-        let base_url = &self.base_url;
+        // Fan out: query routes for each commodity ID in parallel (max 20 concurrent)
+        let client = self.clone();
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(20));
 
-        // Use semaphore to limit concurrent requests (avoid overwhelming the API)
-        let sem = Arc::new(tokio::sync::Semaphore::new(5));
-        let mut handles = Vec::new();
-
-        for cid in commodity_ids {
-            let permit = sem.clone().acquire_owned().await.unwrap();
-            let client = client.clone();
-            let token = token.clone();
-            let base_url = base_url.clone();
-
-            let handle = tokio::spawn(async move {
-                let url = format!("{}/commodities_routes/?id_commodity={}", base_url, cid);
-                let response = client.get(&url)
-                    .header("Authorization", format!("Bearer {}", token))
-                    .timeout(Duration::from_secs(15))
-                    .send().await;
-
-                drop(permit);
-
-                match response {
-                    Ok(resp) if resp.status() == 200 => {
-                        let parsed: ApiResponse<Vec<Route>> = resp.json().await.ok()?;
-                        if parsed.status == "ok" {
-                            return Some(parsed.data);
-                        }
-                    }
-                    _ => {}
+        let futures: Vec<_> = commodity_ids
+            .iter()
+            .map(|&id| {
+                let c = client.clone();
+                let sem = semaphore.clone();
+                async move {
+                    let _permit = sem.acquire().await.expect("semaphore closed");
+                    let routes: Vec<Route> = c
+                        .fetch(&format!("/commodities_routes?id_commodity={id}"))
+                        .await
+                        .unwrap_or_default();
+                    routes
                 }
-                None
-            });
-            handles.push(handle);
+            })
+            .collect();
+
+        let results = futures::future::join_all(futures).await;
+
+        let mut all_routes = Vec::new();
+        for routes in results {
+            all_routes.extend(routes);
         }
 
-        // Collect results
-        for handle in handles {
-            if let Ok(Some(routes)) = handle.await {
-                all_routes.extend(routes);
-            }
-        }
+        // Deduplicate by route ID
+        let mut seen = std::collections::HashSet::new();
+        all_routes.retain(|r| seen.insert(r.id));
 
-        tracing::info!("Fetched {} total routes for {} commodities",
-            all_routes.len(), num_commodities);
+        tracing::info!("total unique routes fetched: {}", all_routes.len());
 
         {
             let mut cache = self.cache.routes.write().await;
             *cache = Some(CacheEntry {
                 data: all_routes.clone(),
-                expires_at: Instant::now() + Duration::from_secs(30 * 60),
+                expires_at: Instant::now() + Duration::from_secs(1800), // 30 min
             });
         }
 
         Ok(all_routes)
     }
 
-    // ------------------------------------------------------------------------
-    // Terminals
-    // ------------------------------------------------------------------------
+    /// Find the average hydrogen fuel price across all terminals.
+    /// Returns price in CR per SCU.
+    pub async fn average_hydrogen_price(&self) -> f64 {
+        let prices = self.get_fuel_prices().await.unwrap_or_default();
 
-    /// Fetch terminals. Auth required.
-    /// Cached for 12 hours.
-    pub async fn get_terminals(&self) -> Result<Vec<Terminal>, AppError> {
-        {
-            let cache = self.cache.terminals.read().await;
-            if let Some(entry) = &*cache {
-                if !entry.is_expired() {
-                    return Ok(entry.data.clone());
+        let hydrogen_prices: Vec<f64> = prices
+            .iter()
+            .filter(|e| e.commodity_id == 104)
+            .filter_map(|e| {
+                let p = e.effective_price();
+                if p > 0.0 {
+                    Some(p)
+                } else {
+                    None
                 }
-            }
+            })
+            .collect();
+
+        if hydrogen_prices.is_empty() {
+            tracing::warn!("no hydrogen prices found, using default 400 CR/SCU");
+            return 400.0;
         }
 
-        let token = self.token.as_ref()
-            .ok_or(AppError::AuthRequired)?;
-
-        let url = format!("{}/terminals", self.base_url);
-        let response = self.client.get(&url)
-            .header("Authorization", format!("Bearer {}", token))
-            .timeout(Duration::from_secs(15))
-            .send().await
-            .map_err(|_| AppError::ApiUnreachable)?;
-
-        if response.status() == 429 {
-            return Err(AppError::RateLimited);
-        }
-
-        let parsed: ApiResponse<Vec<Terminal>> = response.json().await
-            .map_err(|_| AppError::InvalidResponse("Failed to parse terminals response".into()))?;
-
-        if parsed.status != "ok" {
-            return Err(AppError::InvalidResponse(parsed.status));
-        }
-
-        {
-            let mut cache = self.cache.terminals.write().await;
-            *cache = Some(CacheEntry {
-                data: parsed.data.clone(),
-                expires_at: Instant::now() + Duration::from_secs(12 * 60 * 60),
-            });
-        }
-
-        Ok(parsed.data)
+        let avg = hydrogen_prices.iter().sum::<f64>() / hydrogen_prices.len() as f64;
+        tracing::debug!("average hydrogen price: {} CR/SCU", avg);
+        avg
     }
 }
