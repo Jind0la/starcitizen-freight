@@ -18,6 +18,10 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-feature
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 
+# Web UI embedding
+rust-embed = "8"
+mime_guess = "2"
+
 # CLI / TUI
 ratatui = "0.28"
 crossterm = "0.28"
@@ -42,9 +46,9 @@ tower-http = { version = "0.6", features = ["fs", "cors"] }
 tower = "0.5"
 http = "1"
 
-# Embedded static files
-rust-embed = "8"
-mime_guess = "2"
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [profile.release]
 opt-level = 3

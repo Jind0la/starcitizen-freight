@@ -1,166 +1,135 @@
-//! Freight Web UI Server
-//!
-//! Serves the web UI and provides the /api/routes endpoint.
-
-use axum::{
-    body::Body,
-    extract::{Path, Query, State},
-    http::{Response, StatusCode, header},
-    routing::get,
-    Router,
-};
-use std::net::SocketAddr;
-use std::sync::Arc;
-use tower_http::cors::CorsLayer;
-use rust_embed::Embed;
+//! Axum web server for Freight
 
 use crate::api::UexClient;
 use crate::calculation::rank_routes;
 use crate::error::AppError;
-use crate::models::RankedRoute;
+use crate::models::{RankedRoute, SYSTEM_ID_STANTON};
+use axum::{
+    body::Body,
+    extract::{Query, State},
+    http::{header, StatusCode},
+    response::{IntoResponse, Response},
+    routing::get,
+    Json, Router,
+};
+use serde::Deserialize;
+use std::sync::Arc;
+use tower_http::cors::CorsLayer;
 
-// Embed static files from src/web/
-#[derive(Embed)]
-#[folder = "src/web"]
-struct StaticAssets;
+#[derive(Clone)]
+struct AppServices {
+    client: UexClient,
+}
 
-// ---------------------------------------------------------------------------
-// API Types
-// ---------------------------------------------------------------------------
-
-#[derive(serde::Deserialize)]
-pub struct RoutesQuery {
-    scu: u32,
+#[derive(Debug, Deserialize)]
+struct RouteParams {
+    scu: Option<u32>,
+    system_id: Option<u32>,
+    ship_max_container: Option<u32>,
 }
 
 #[derive(serde::Serialize)]
-pub struct RoutesResponse {
+struct RoutesResponse {
     routes: Vec<RankedRoute>,
     total_fuel_estimate: f64,
     last_updated: String,
+    cached: bool,
+    cache_age_ms: Option<u64>,
 }
 
-// ---------------------------------------------------------------------------
-// Static file handling
-// ---------------------------------------------------------------------------
-
-fn serve_static(filename: &str) -> Response<Body> {
-    let data = if filename == "index.html" || filename.is_empty() {
-        StaticAssets::get("index.html").map(|f| f.data.into_owned())
-    } else {
-        StaticAssets::get(filename).map(|f| f.data.into_owned())
-    };
-
-    match data {
-        Some(data) => {
-            let mime = mime_guess::from_path(filename)
-                .first_or_octet_stream();
-            Response::builder()
-                .status(200)
-                .header(header::CONTENT_TYPE, mime.as_ref())
-                .body(Body::from(data))
-                .unwrap()
-        }
-        None => {
-            if let Some(file) = StaticAssets::get("index.html") {
-                Response::builder()
-                    .status(200)
-                    .header(header::CONTENT_TYPE, "text/html")
-                    .body(Body::from(file.data.into_owned()))
-                    .unwrap()
-            } else {
-                Response::builder()
-                    .status(StatusCode::NOT_FOUND)
-                    .body(Body::empty())
-                    .unwrap()
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Routes
-// ---------------------------------------------------------------------------
-
+/// GET /api/routes?scu=500&system_id=68&ship_max_container=8
 async fn routes_handler(
-    State(client): State<Arc<UexClient>>,
-    Query(query): Query<RoutesQuery>,
-) -> Result<axum::Json<RoutesResponse>, AppError> {
-    if query.scu == 0 || query.scu > 16000 {
-        return Err(AppError::InvalidInput(
-            "SCU must be between 1 and 16000".into(),
-        ));
-    }
+    Query(params): Query<RouteParams>,
+    State(services): State<Arc<AppServices>>,
+) -> Result<Json<RoutesResponse>, AppError> {
+    let scu = params.scu.unwrap_or(500);
+    let system_id = params.system_id.unwrap_or(SYSTEM_ID_STANTON);
+    let ship_max_container = params.ship_max_container;
 
-    let (routes_result, fuel_result) = tokio::join!(
-        client.get_routes(),
-        client.get_fuel_prices()
+    // Fetch all data
+    let (all_routes, commodities) = tokio::join!(
+        services.client.get_routes(),
+        services.client.get_commodities()
     );
 
-    let routes = routes_result?;
-    let fuel_prices = fuel_result.unwrap_or_default();
+    let all_routes = all_routes?;
+    let commodities = commodities?;
 
-    let ranked = rank_routes(&routes, &fuel_prices, query.scu);
-    let total_fuel: f64 = ranked.iter().map(|r| r.fuel_cost).sum();
+    // Rank and filter
+    let ranked = rank_routes(&all_routes, &commodities, scu, ship_max_container, system_id);
 
-    Ok(axum::Json(RoutesResponse {
+    // Sum fuel costs for summary
+    let total_fuel_estimate: f64 = ranked.iter().map(|r| r.fuel_cost).sum();
+
+    let last_updated = chrono::Utc::now()
+        .format("%Y-%m-%d %H:%M UTC")
+        .to_string();
+
+    Ok(Json(RoutesResponse {
         routes: ranked,
-        total_fuel_estimate: total_fuel,
-        last_updated: chrono::Utc::now().format("%H:%M UTC").to_string(),
+        total_fuel_estimate,
+        last_updated,
+        cached: false,
+        cache_age_ms: None,
     }))
 }
 
-async fn static_handler(Path(filename): Path<String>) -> Response<Body> {
-    serve_static(&filename)
+/// Serve the web UI (index.html + static assets via rust-embed)
+async fn serve_index() -> impl IntoResponse {
+    serve_static("index.html", "text/html")
 }
 
-async fn static_index() -> Response<Body> {
-    serve_static("index.html")
+async fn serve_styles() -> impl IntoResponse {
+    serve_static("styles.css", "text/css")
 }
 
-async fn static_app_js() -> Response<Body> {
-    serve_static("app.js")
+async fn serve_app_js() -> impl IntoResponse {
+    serve_static("app.js", "application/javascript")
 }
 
-async fn static_styles_css() -> Response<Body> {
-    serve_static("styles.css")
+/// Serve a built-in static asset
+fn serve_static(file: &str, mime: &str) -> Response {
+    let embed = crate::web_ui::get(file);
+    let body: Body = match embed {
+        Some(data) => data.data.into_owned().into(),
+        None => {
+            return (StatusCode::NOT_FOUND, "Not found").into_response();
+        }
+    };
+    let mut res = Response::new(body);
+    res.headers_mut().insert(
+        header::CONTENT_TYPE,
+        mime.parse().unwrap_or("application/octet-stream".parse().unwrap()),
+    );
+    res.headers_mut().insert(header::CACHE_CONTROL, "no-cache".parse().unwrap());
+    res
 }
 
-// ---------------------------------------------------------------------------
-// Server startup
-// ---------------------------------------------------------------------------
+/// Serve favicon
+async fn serve_favicon() -> impl IntoResponse {
+    serve_static("favicon.svg", "image/svg+xml")
+}
 
-pub async fn start_server(port: u16, token: Option<String>) -> anyhow::Result<()> {
-    let client = Arc::new(UexClient::new(token));
+pub async fn start_web_server(client: UexClient, port: u16) {
+    let services = Arc::new(AppServices { client });
 
-    let cors = CorsLayer::new()
-        .allow_origin(tower_http::cors::Any)
-        .allow_methods(tower_http::cors::Any)
-        .allow_headers(tower_http::cors::Any);
+    let cors = CorsLayer::permissive();
 
     let app = Router::new()
+        .route("/", get(serve_index))
+        .route("/index.html", get(serve_index))
+        .route("/styles.css", get(serve_styles))
+        .route("/app.js", get(serve_app_js))
+        .route("/favicon.svg", get(serve_favicon))
         .route("/api/routes", get(routes_handler))
-        .route("/app.js", get(static_app_js))
-        .route("/styles.css", get(static_styles_css))
-        .route("/static/{filename}", get(static_handler))
-        .route("/", get(static_index))
         .layer(cors)
-        .with_state(client);
+        .with_state(services);
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let addr = format!("0.0.0.0:{port}");
+    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
+    tracing::info!("🌐 Web UI listening on http://localhost:{port}");
 
-    println!();
-    println!("  ╔═══════════════════════════════════════════╗");
-    println!("  ║       ◈ FREIGHT — Web UI Ready          ║");
-    println!("  ╠═══════════════════════════════════════════╣");
-    println!("  ║  🌐  http://localhost:{}", port);
-    println!("  ║                                           ║");
-    println!("  ║  Press Ctrl+C to stop                    ║");
-    println!("  ╚═══════════════════════════════════════════╝");
-    println!();
-
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
-
-    Ok(())
+    axum::serve(listener, app)
+        .await
+        .expect("web server error");
 }

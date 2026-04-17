@@ -13,6 +13,7 @@ mod cli;
 mod error;
 mod models;
 mod web_server;
+mod web_ui;
 
 use anyhow::Result;
 use chrono::Utc;
@@ -29,6 +30,7 @@ use std::time::Duration;
 
 use crate::api::UexClient;
 use crate::calculation::rank_routes;
+use crate::models::SYSTEM_ID_STANTON;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -46,7 +48,8 @@ async fn main() -> Result<()> {
             .unwrap_or(8080);
 
         let token = std::env::var("UEX_API_TOKEN").ok();
-        web_server::start_server(port, token).await?;
+        let client = UexClient::new(token);
+        web_server::start_web_server(client, port).await;
         return Ok(());
     }
 
@@ -180,12 +183,15 @@ async fn refresh_routes(
     app_state: &mut AppState,
     error_msg: &mut Option<String>,
 ) -> Result<(), error::AppError> {
-    let (routes_result, fuel_result) = tokio::join!(client.get_routes(), client.get_fuel_prices());
+    let (routes_result, commodities_result) = tokio::join!(
+        client.get_routes(),
+        client.get_commodities()
+    );
 
     let routes = routes_result?;
-    let fuel_prices = fuel_result.unwrap_or_default();
+    let commodities = commodities_result?;
 
-    let ranked = rank_routes(&routes, &fuel_prices, cargo_scu);
+    let ranked = rank_routes(&routes, &commodities, cargo_scu, None, SYSTEM_ID_STANTON);
     let total_fuel: f64 = ranked.iter().map(|r| r.fuel_cost).sum();
 
     app_state.cargo_scu = cargo_scu;

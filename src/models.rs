@@ -13,6 +13,40 @@ pub struct ApiResponse<T> {
 }
 
 // ============================================================================
+// Commodities
+// ============================================================================
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct Commodity {
+    pub id: u32,
+    #[serde(rename = "id_parent")]
+    pub parent_id: Option<u32>,
+    pub name: String,
+    pub code: Option<String>,
+    pub kind: Option<String>,
+    #[serde(rename = "weight_scu")]
+    pub weight_scu: Option<f64>,
+    #[serde(rename = "price_buy")]
+    pub price_buy: Option<f64>,
+    #[serde(rename = "price_sell")]
+    pub price_sell: Option<f64>,
+    #[serde(rename = "is_available")]
+    pub is_available: Option<i32>,
+    #[serde(rename = "is_available_live")]
+    pub is_available_live: Option<i32>,
+    #[serde(rename = "is_visible")]
+    pub is_visible: Option<i32>,
+    #[serde(rename = "is_buyable")]
+    pub is_buyable: Option<i32>,
+    #[serde(rename = "is_sellable")]
+    pub is_sellable: Option<i32>,
+    #[serde(rename = "is_illegal")]
+    pub is_illegal: Option<i32>,
+    #[serde(rename = "is_fuel")]
+    pub is_fuel: Option<i32>,
+}
+
+// ============================================================================
 // Commodity Routes
 // ============================================================================
 
@@ -29,10 +63,18 @@ pub struct Route {
     pub planet_origin_id: Option<u32>,
     #[serde(rename = "id_planet_destination")]
     pub planet_destination_id: Option<u32>,
+    #[serde(rename = "id_orbit_origin")]
+    pub orbit_origin_id: Option<u32>,
+    #[serde(rename = "id_orbit_destination")]
+    pub orbit_destination_id: Option<u32>,
     #[serde(rename = "id_terminal_origin")]
     pub terminal_origin_id: u32,
     #[serde(rename = "id_terminal_destination")]
     pub terminal_destination_id: u32,
+    #[serde(rename = "id_faction_origin")]
+    pub faction_origin_id: Option<u32>,
+    #[serde(rename = "id_faction_destination")]
+    pub faction_destination_id: Option<u32>,
     pub code: String,
     pub price_origin: f64,
     pub price_destination: f64,
@@ -43,10 +85,13 @@ pub struct Route {
     pub price_margin: f64,
     pub price_roi: f64,
     pub scu_origin: Option<f64>,
-    pub scu_destination: Option<f64>,
-    pub scu_margin: Option<f64>,
     pub scu_origin_users: Option<f64>,
+    pub scu_origin_users_rows: Option<f64>,
+    pub scu_destination: Option<f64>,
     pub scu_destination_users: Option<f64>,
+    pub scu_destination_users_rows: Option<f64>,
+    pub scu_margin: Option<f64>,
+    pub scu_reachable: Option<f64>,
     pub volatility_origin: Option<f64>,
     pub volatility_destination: Option<f64>,
     pub status_origin: Option<i32>,
@@ -113,6 +158,8 @@ pub struct Route {
     pub terminal_origin_code: Option<String>,
     #[serde(rename = "origin_terminal_slug")]
     pub terminal_origin_slug: Option<String>,
+    #[serde(rename = "origin_terminal_is_player_owned")]
+    pub origin_terminal_is_player_owned: Option<i32>,
     #[serde(rename = "origin_faction_name")]
     pub origin_faction_name: Option<String>,
     #[serde(rename = "destination_star_system_name")]
@@ -126,7 +173,9 @@ pub struct Route {
     #[serde(rename = "destination_terminal_code")]
     pub terminal_destination_code: Option<String>,
     #[serde(rename = "destination_terminal_slug")]
-    pub terminal_destination_slug: Option<String>,
+    pub destination_terminal_slug: Option<String>,
+    #[serde(rename = "destination_terminal_is_player_owned")]
+    pub destination_terminal_is_player_owned: Option<i32>,
     #[serde(rename = "destination_faction_name")]
     pub destination_faction_name: Option<String>,
     #[serde(rename = "game_version_origin")]
@@ -226,6 +275,62 @@ pub struct Terminal {
 }
 
 // ============================================================================
+// Star Systems
+// ============================================================================
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct StarSystem {
+    pub id: u32,
+    pub name: String,
+    #[serde(rename = "is_available")]
+    pub is_available: Option<i32>,
+    #[serde(rename = "is_available_live")]
+    pub is_available_live: Option<i32>,
+}
+
+// Known system IDs in UEX API
+pub const SYSTEM_ID_STANTON: u32 = 68;
+pub const SYSTEM_ID_PYRO: u32 = 64;
+pub const SYSTEM_ID_NYX: u32 = 55;
+
+/// System name constants used by the UEX API.
+pub const SYSTEM_NAME_STANTON: &str = "Stanton";
+pub const SYSTEM_NAME_PYRO: &str = "Pyro";
+pub const SYSTEM_NAME_NYX: &str = "Nyx";
+
+// Lagrange orbit IDs that act as jump gates between Stanton ↔ Pyro
+// These appear in the orbits_distances data
+pub const LAGRANGE_STANTON_TERRA_GATEWAY: u32 = 361; // Terra Gateway in Stanton
+pub const LAGRANGE_STANTON_MICROTECH_L1: u32 = 339; // microTech Lagrange Point 1
+pub const LAGRANGE_STANTON_ARCCORP_L1: u32 = 326;   // ArcCorp Lagrange Point 1
+pub const LAGRANGE_STANTON_CRUSAHER_L5: u32 = 333;  // Crusader Lagrange Point 5
+pub const STANTON_GATEWAY_TO_PYRO: u32 = 398;       // Stanton Gateway (Pyro system) → in Stanton view
+pub const PYRO_GATEWAY_STANTON: u32 = 398;          // Same orbit, different system perspective
+
+// ============================================================================
+// Orbit Distances (for cross-system route calculation)
+// ============================================================================
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct OrbitDistance {
+    #[serde(rename = "id_star_system_origin")]
+    pub star_system_origin_id: u32,
+    #[serde(rename = "id_star_system_destination")]
+    pub star_system_destination_id: u32,
+    #[serde(rename = "id_orbit_origin")]
+    pub orbit_origin_id: u32,
+    #[serde(rename = "id_orbit_destination")]
+    pub orbit_destination_id: u32,
+    pub distance: f64,
+    #[serde(rename = "orbit_origin_name")]
+    pub orbit_origin_name: Option<String>,
+    #[serde(rename = "orbit_destination_name")]
+    pub orbit_destination_name: Option<String>,
+    #[serde(rename = "star_system_name")]
+    pub star_system_name: Option<String>,
+}
+
+// ============================================================================
 // Application domain models (enriched/processed)
 // ============================================================================
 
@@ -254,11 +359,38 @@ impl StockLevel {
     }
 }
 
+/// Number of quantum jumps between systems for a route.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub enum JumpCount {
+    Zero,  // intra-system
+    One,   // jump to Lagrange/gateway
+    Two,   // jump through Lagrange
+}
+
+impl JumpCount {
+    pub fn as_u8(&self) -> u8 {
+        match self {
+            JumpCount::Zero => 0,
+            JumpCount::One => 1,
+            JumpCount::Two => 2,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            JumpCount::Zero => "",
+            JumpCount::One => "1 jump",
+            JumpCount::Two => "2 jumps",
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct RankedRoute {
     pub rank: u8,
     pub stars: u8,
     pub commodity: String,
+    pub commodity_slug: Option<String>,
     pub origin: String,
     pub destination: String,
     pub scu_to_trade: u32,
@@ -272,12 +404,86 @@ pub struct RankedRoute {
     pub container_sizes: String,
     pub distance_gm: f64,
     pub data_age_days: Option<u32>,
+    /// Whether the origin terminal is player-owned
+    pub is_player_owned: bool,
+    /// The terminal slug for the destination (for Q-Link navigation)
+    pub destination_slug: Option<String>,
+    /// Whether this route crosses star systems (Stanton ↔ Pyro, etc.)
+    pub is_interstellar: bool,
+    /// Number of quantum jumps required (0=intra-system, 1-2=interstellar)
+    pub jump_count: u8,
+    /// The destination star system name (for interstellar routes)
+    pub destination_system: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct AppState {
     pub cargo_scu: u32,
     pub routes: Vec<RankedRoute>,
     pub fuel_estimate: f64,
     pub last_updated: chrono::DateTime<chrono::Utc>,
 }
+
+// ============================================================================
+// Ships — built-in cargo capacity reference
+// ============================================================================
+
+use serde::Serialize;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Ship {
+    pub name: &'static str,
+    pub scu: u32,
+    pub max_container_size: u32, // 1=SCU, 2=ME, 4=SE, 8=TE, 16=BE, 32=AE, 0=no cargo
+}
+
+pub const SHIPS: &[Ship] = &[
+    // Small (1-32 SCU)
+    Ship { name: "Aurora MR",          scu: 0,   max_container_size: 0 },
+    Ship { name: "Aurora LX",          scu: 0,   max_container_size: 0 },
+    Ship { name: "Mustang Alpha",       scu: 0,   max_container_size: 0 },
+    Ship { name: "Cutter",             scu: 0,   max_container_size: 0 },
+    Ship { name: "Nomad",              scu: 6,   max_container_size: 1 },
+    Ship { name: "Nostromo",           scu: 8,   max_container_size: 1 },
+    Ship { name: "300i",              scu: 0,   max_container_size: 0 },
+    Ship { name: "315p",              scu: 0,   max_container_size: 0 },
+
+    // Medium (33-400 SCU)
+    Ship { name: "Cutlass Black",      scu: 66,  max_container_size: 4 },
+    Ship { name: "Cutlass Red",        scu: 66,  max_container_size: 4 },
+    Ship { name: "Cutlass Blue",       scu: 66,  max_container_size: 4 },
+    Ship { name: "Freelancer",         scu: 120, max_container_size: 4 },
+    Ship { name: "Freelancer MAX",     scu: 120, max_container_size: 4 },
+    Ship { name: "Freelancer DUR",     scu: 120, max_container_size: 4 },
+    Ship { name: "Constellation Taurus", scu: 256, max_container_size: 8 },
+    Ship { name: "Constellation Andromeda", scu: 256, max_container_size: 8 },
+    Ship { name: "Constellation Aquila",  scu: 256, max_container_size: 8 },
+    Ship { name: "Constellation Phoenix",  scu: 256, max_container_size: 8 },
+    Ship { name: "Corsair",            scu: 180, max_container_size: 8 },
+    Ship { name: "Spirit C1",          scu: 128, max_container_size: 4 },
+    Ship { name: "Valkyrie",          scu: 160, max_container_size: 4 },
+
+    // Large (401-2000 SCU)
+    Ship { name: "Caterpillar",        scu: 576, max_container_size: 16 },
+    Ship { name: "Caterpillar Solo",  scu: 288, max_container_size: 16 },
+    Ship { name: "Mole",               scu: 96,  max_container_size: 2 },
+    Ship { name: "Mole Carbon",        scu: 96,  max_container_size: 2 },
+    Ship { name: "Mole Talonite",      scu: 96,  max_container_size: 2 },
+    Ship { name: "Mole Avalon",        scu: 96,  max_container_size: 2 },
+    Ship { name: "Hull A",            scu: 200, max_container_size: 4 },
+    Ship { name: "Hull B",            scu: 500, max_container_size: 8 },
+    Ship { name: "Hull C",            scu: 1500, max_container_size: 16 },
+    Ship { name: "Hull D",            scu: 2000, max_container_size: 32 },
+    Ship { name: "Starfarer",          scu: 400, max_container_size: 16 },
+    Ship { name: "Starfarer Gemini",   scu: 400, max_container_size: 16 },
+    Ship { name: "Reclaimer",          scu: 180, max_container_size: 4 },
+    Ship { name: "Rescue",             scu: 0,   max_container_size: 0 },
+
+    // Extra Large (2001+ SCU)
+    Ship { name: "500 Tons",          scu: 5000, max_container_size: 32 },
+    Ship { name: "800 Tons",          scu: 8000, max_container_size: 32 },
+    Ship { name: "Carrack",           scu: 240, max_container_size: 4 },
+    Ship { name: "Expanse",           scu: 3200, max_container_size: 32 },
+    Ship { name: "MPUV Cargo",        scu: 1,   max_container_size: 1 },
+    Ship { name: "X1 Velocity",       scu: 0,   max_container_size: 0 },
+];

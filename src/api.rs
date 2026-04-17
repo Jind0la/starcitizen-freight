@@ -1,13 +1,13 @@
 //! UEX API 2.0 client for Freight
 //!
 //! Base URL: https://api.uexcorp.space/2.0/
-//! Auth: Bearer token (optional for public endpoints)
-//! Rate limit: 172,800/day or 120/min
+//! Auth: Bearer token REQUIRED for /commodities_routes
+//! Rate limit: 172,800/day or 120/min (with auth)
 
 use std::time::{Duration, Instant};
 
 use crate::error::AppError;
-use crate::models::{ApiResponse, FuelPrice, Route, Terminal};
+use crate::models::{ApiResponse, Commodity, Route, Terminal};
 use reqwest::Client;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -27,7 +27,7 @@ impl<T> CacheEntry<T> {
 /// Shared cache for API responses
 struct ApiCache {
     routes: RwLock<Option<CacheEntry<Vec<Route>>>>,
-    fuel_prices: RwLock<Option<CacheEntry<Vec<FuelPrice>>>>,
+    commodities: RwLock<Option<CacheEntry<Vec<Commodity>>>>,
     terminals: RwLock<Option<CacheEntry<Vec<Terminal>>>>,
 }
 
@@ -35,7 +35,7 @@ impl Default for ApiCache {
     fn default() -> Self {
         Self {
             routes: RwLock::new(None),
-            fuel_prices: RwLock::new(None),
+            commodities: RwLock::new(None),
             terminals: RwLock::new(None),
         }
     }
@@ -53,8 +53,8 @@ pub struct UexClient {
 impl UexClient {
     pub fn new(token: Option<String>) -> Self {
         let client = Client::builder()
-            .timeout(Duration::from_secs(10))
-            .user_agent("Freight/0.1.0 (Star Citizen Cargo Calculator)")
+            .timeout(Duration::from_secs(20))
+            .user_agent("Freight/0.2.0 (Star Citizen Cargo Calculator)")
             .build()
             .expect("reqwest client must build");
 
@@ -75,13 +75,57 @@ impl UexClient {
     }
 
     // ------------------------------------------------------------------------
+    // Commodities (needed for hydrogen price lookup)
+    // ------------------------------------------------------------------------
+
+    /// Fetch all commodities. No auth required.
+    /// Cached for 1 hour.
+    pub async fn get_commodities(&self) -> Result<Vec<Commodity>, AppError> {
+        {
+            let cache = self.cache.commodities.read().await;
+            if let Some(entry) = &*cache {
+                if !entry.is_expired() {
+                    return Ok(entry.data.clone());
+                }
+            }
+        }
+
+        let url = format!("{}/commodities", self.base_url);
+        let response = self.build_request(&url).send().await
+            .map_err(|_| AppError::ApiUnreachable)?;
+
+        if response.status() == 429 {
+            return Err(AppError::RateLimited);
+        }
+
+        let parsed: ApiResponse<Vec<Commodity>> = response.json().await
+            .map_err(|_| AppError::InvalidResponse("Failed to parse commodities response".into()))?;
+
+        if parsed.status != "ok" {
+            return Err(AppError::InvalidResponse(parsed.status));
+        }
+
+        let data = parsed.data;
+
+        {
+            let mut cache = self.cache.commodities.write().await;
+            *cache = Some(CacheEntry {
+                data: data.clone(),
+                expires_at: Instant::now() + Duration::from_secs(60 * 60),
+            });
+        }
+
+        Ok(data)
+    }
+
+    // ------------------------------------------------------------------------
     // Routes
     // ------------------------------------------------------------------------
 
-    /// Fetch all commodities routes from UEX API.
-    /// Cached for 30 minutes (matches API cache TTL).
+    /// Fetch all commodity routes from UEX API.
+    /// Requires auth — fetches routes per-commodity (API requires at least one filter param).
+    /// Cached for 30 minutes.
     pub async fn get_routes(&self) -> Result<Vec<Route>, AppError> {
-        // Check cache
         {
             let cache = self.cache.routes.read().await;
             if let Some(entry) = &*cache {
@@ -91,85 +135,80 @@ impl UexClient {
             }
         }
 
-        let url = format!("{}/commodities_routes", self.base_url);
-        let response = self.build_request(&url).send().await
-            .map_err(|_| AppError::ApiUnreachable)?;
+        let token = self.token.as_ref()
+            .ok_or(AppError::AuthRequired)?;
 
-        if response.status() == 429 {
-            return Err(AppError::RateLimited);
-        }
+        // Step 1: Get all commodities to enumerate IDs
+        let commodities = self.get_commodities().await?;
+        let commodity_ids: Vec<u32> = commodities.iter().map(|c| c.id).collect();
+        let num_commodities = commodity_ids.len();
 
-        let parsed: ApiResponse<Vec<Route>> = response.json().await
-            .map_err(|_| AppError::InvalidResponse("Failed to parse routes response".into()))?;
+        // Step 2: Fetch routes for each commodity
+        let mut all_routes = Vec::new();
+        let client = &self.client;
+        let base_url = &self.base_url;
 
-        if parsed.status != "ok" {
-            return Err(AppError::InvalidResponse(parsed.status));
-        }
+        // Use semaphore to limit concurrent requests (avoid overwhelming the API)
+        let sem = Arc::new(tokio::sync::Semaphore::new(5));
+        let mut handles = Vec::new();
 
-        // Update cache
-        {
-            let mut cache = self.cache.routes.write().await;
-            *cache = Some(CacheEntry {
-                data: parsed.data.clone(),
-                expires_at: Instant::now() + Duration::from_secs(30 * 60),
-            });
-        }
+        for cid in commodity_ids {
+            let permit = sem.clone().acquire_owned().await.unwrap();
+            let client = client.clone();
+            let token = token.clone();
+            let base_url = base_url.clone();
 
-        Ok(parsed.data)
-    }
+            let handle = tokio::spawn(async move {
+                let url = format!("{}/commodities_routes/?id_commodity={}", base_url, cid);
+                let response = client.get(&url)
+                    .header("Authorization", format!("Bearer {}", token))
+                    .timeout(Duration::from_secs(15))
+                    .send().await;
 
-    // ------------------------------------------------------------------------
-    // Fuel Prices
-    // ------------------------------------------------------------------------
+                drop(permit);
 
-    /// Fetch hydrogen fuel prices (for fuel cost estimation).
-    /// Cached for 30 minutes.
-    pub async fn get_fuel_prices(&self) -> Result<Vec<FuelPrice>, AppError> {
-        // Check cache
-        {
-            let cache = self.cache.fuel_prices.read().await;
-            if let Some(entry) = &*cache {
-                if !entry.is_expired() {
-                    return Ok(entry.data.clone());
+                match response {
+                    Ok(resp) if resp.status() == 200 => {
+                        let parsed: ApiResponse<Vec<Route>> = resp.json().await.ok()?;
+                        if parsed.status == "ok" {
+                            return Some(parsed.data);
+                        }
+                    }
+                    _ => {}
                 }
+                None
+            });
+            handles.push(handle);
+        }
+
+        // Collect results
+        for handle in handles {
+            if let Ok(Some(routes)) = handle.await {
+                all_routes.extend(routes);
             }
         }
 
-        let url = format!("{}/fuel_prices", self.base_url);
-        let response = self.build_request(&url).send().await
-            .map_err(|_| AppError::ApiUnreachable)?;
+        tracing::info!("Fetched {} total routes for {} commodities",
+            all_routes.len(), num_commodities);
 
-        if response.status() == 429 {
-            return Err(AppError::RateLimited);
-        }
-
-        let parsed: ApiResponse<Vec<FuelPrice>> = response.json().await
-            .map_err(|_| AppError::InvalidResponse("Failed to parse fuel prices response".into()))?;
-
-        if parsed.status != "ok" {
-            return Err(AppError::InvalidResponse(parsed.status));
-        }
-
-        // Update cache
         {
-            let mut cache = self.cache.fuel_prices.write().await;
+            let mut cache = self.cache.routes.write().await;
             *cache = Some(CacheEntry {
-                data: parsed.data.clone(),
+                data: all_routes.clone(),
                 expires_at: Instant::now() + Duration::from_secs(30 * 60),
             });
         }
 
-        Ok(parsed.data)
+        Ok(all_routes)
     }
 
     // ------------------------------------------------------------------------
     // Terminals
     // ------------------------------------------------------------------------
 
-    /// Fetch terminals for Stanton system.
+    /// Fetch terminals. Auth required.
     /// Cached for 12 hours.
     pub async fn get_terminals(&self) -> Result<Vec<Terminal>, AppError> {
-        // Check cache
         {
             let cache = self.cache.terminals.read().await;
             if let Some(entry) = &*cache {
@@ -179,8 +218,14 @@ impl UexClient {
             }
         }
 
-        let url = format!("{}/terminals?id_star_system=1", self.base_url);
-        let response = self.build_request(&url).send().await
+        let token = self.token.as_ref()
+            .ok_or(AppError::AuthRequired)?;
+
+        let url = format!("{}/terminals", self.base_url);
+        let response = self.client.get(&url)
+            .header("Authorization", format!("Bearer {}", token))
+            .timeout(Duration::from_secs(15))
+            .send().await
             .map_err(|_| AppError::ApiUnreachable)?;
 
         if response.status() == 429 {
@@ -194,7 +239,6 @@ impl UexClient {
             return Err(AppError::InvalidResponse(parsed.status));
         }
 
-        // Update cache
         {
             let mut cache = self.cache.terminals.write().await;
             *cache = Some(CacheEntry {

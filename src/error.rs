@@ -5,6 +5,9 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum AppError {
+    #[error("UEX API token required. Set UEX_API_TOKEN in your .env file (get one at https://uexcorp.space/api/apps).")]
+    AuthRequired,
+
     #[error("Cannot reach UEX API. Check your internet connection.")]
     ApiUnreachable,
 
@@ -27,6 +30,7 @@ pub enum AppError {
 impl IntoResponse for AppError {
     fn into_response(self) -> axum::response::Response {
         let status = match &self {
+            AppError::AuthRequired => StatusCode::UNAUTHORIZED,
             AppError::ApiUnreachable => StatusCode::SERVICE_UNAVAILABLE,
             AppError::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             AppError::InvalidResponse(_) => StatusCode::BAD_GATEWAY,

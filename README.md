@@ -2,31 +2,40 @@
 
 **Dead-simple cargo profit calculator. One input. One answer.**
 
-Enter your cargo hold size, get the top 3 most profitable trade routes in Stanton right now — with fuel costs already subtracted.
+Enter your cargo hold size, get the top 3 most profitable trade routes in Stanton or Pyro right now — with fuel costs already subtracted.
 
 ```
 ╔══════════════════════════════════════════════════════════╗
-║  FREIGHT v0.1.0  ·  Stanton System  ·  Updated 2m ago  ║
+║  FREIGHT v0.3.0  ·  Stanton System  ·  Updated 2m ago  ║
 ╠══════════════════════════════════════════════════════════╣
-║  CARGO (SCU)  [____42____]  [CALCULATE]                  ║
+║  #1 ★★★  IODINE  →  Admin - Seraphim      +3,666 CR/SCU║
+║       HUR-OUTPOST → HUR-L1    500 SCU   +1,833,000 CR   ║
+║       Margin 28.2%  ·  Stock: HIGH       Qty: 500 SCU  ║
 ╠══════════════════════════════════════════════════════════╣
-║  #1 ★★★  ARES STAR  →  ORISON           +12,847 CR/SCU ║
-║       Laranite    42 SCU @ buy → sell   +539,564 CR     ║
-║       Margin 47%  ·  Stock: HIGH         Qty: 42 SCU   ║
-╠══════════════════════════════════════════════════════════╣
-║  ⚠ Fuel est: ~2,400 CR  ·  Based on avg 3.24.x prices   ║
+║  ⚠ Fuel est: ~0 CR  ·  Based on avg 3.24.x prices       ║
 ╚══════════════════════════════════════════════════════════╝
 ```
 
+## What Makes Freight Different
+
+Most trade tools give you route tables — long lists of every commodity at every station. Freight does one thing: **tells you the single best route for your cargo hold right now**.
+
+The difference:
+- **One input.** Cargo size. That's it. No commodity filters, no station search, no Excel exports.
+- **Fuel included.** Most calculators show gross profit. Freight subtracts hydrogen consumption based on route distance, giving you **net profit**.
+- **Star ratings.** Confidence score from 1-3 stars based on user trade data volume and data freshness. More user trades = more reliable price.
+- **Interstellar routes.** First tool to show Stanton→Pyro cross-system routes computed from live UEX data. Buy cheap in Stanton, sell high in Pyro — fuel cost included.
+
 ## Features
 
-- **Top 3 profit routes** — ranked by net profit (sell - buy - fuel)
-- **Fuel cost included** — hydrogen consumption estimated per route distance
+- **Top 3 net profit routes** — ranked by (sell - buy - fuel)
+- **Fuel cost included** — hydrogen consumption estimated per route distance and quantum jump count
+- **Star ratings** — confidence from user trade volume + data freshness
 - **Stock level indicators** — HIGH/MED/LOW demand at destination
-- **Star ratings** — confidence score based on data freshness + user trade volume
-- **Expandable rows** — click a route to see fuel estimate, distance, container sizes
-- **Caching** — API responses cached 30min to minimize requests
-- **No account required** — public UEX API, no auth needed
+- **Interstellar (Pyro) routes** — cross-system Stanton→Pyro routes with jump fuel cost
+- **System selector** — Stanton (default) or Pyro
+- **Ship presets** — select your ship and container size is auto-detected
+- **Cache** — API responses cached 30min, no redundant requests
 
 ## Installation
 
@@ -56,41 +65,72 @@ Public endpoints work without a token. For higher rate limits:
 
 ```bash
 # Get a token at: https://uexcorp.space/api/apps
-echo "UEX_API_TOKEN=your_token_here" > .env
+echo "UEX_API_TOKEN=your_token" > .env
 ```
 
-## Usage
+## Web UI
+
+Start the web interface:
+
+```bash
+./target/release/freight --web --port 8081
+```
+
+Then open [http://localhost:8081](http://localhost:8081) in your browser.
+
+## CLI
 
 ```bash
 freight
 ```
 
 **Controls:**
-- `↑` / `↓` — navigate routes (future: history)
+- `↑` / `↓` — navigate routes
 - `Enter` — calculate profit for entered SCU
 - `Click` route — expand details
 - `Esc` or `q` — quit
+
+## API
+
+```bash
+# Get top routes for 500 SCU in Stanton
+curl "http://localhost:8081/api/routes?scu=500&system_id=68"
+
+# Get top routes for 500 SCU in Pyro (includes interstellar Stanton→Pyro routes)
+curl "http://localhost:8081/api/routes?scu=500&system_id=64"
+```
 
 ## Architecture
 
 ```
 src/
 ├── main.rs          # TUI event loop
-├── api.rs           # UEX API client (reqwest, async, cached)
-├── models.rs        # API response types + domain types
-├── calculation.rs   # Route filtering, ranking, fuel math
-├── cli.rs           # ratatui TUI layout
-└── error.rs         # Error types
+├── api.rs           # UEX API client (reqwest, async, parallel commodity fetching)
+├── models.rs        # API response types + domain types + ship database
+├── calculation.rs   # Route ranking, fuel estimation, interstellar logic
+├── cli.rs           # TUI rendering (ratatui)
+├── error.rs         # Error types
+└── web_server.rs    # Axum HTTP server for web UI
+
+src/web/
+├── index.html      # Web UI
+├── styles.css      # Dark theme styling
+└── app.js          # Vanilla JS frontend
 ```
 
-**API endpoints used:**
-- `GET /2.0/commodities_routes` — pre-computed profitable routes
-- `GET /2.0/fuel_prices` — hydrogen prices for fuel estimation
-- `GET /2.0/terminals?id_star_system=1` — terminal metadata (cached 12h)
+## Data Sources
 
-## Disclaimer
+- Commodity prices & routes: [UEX API v2.0](https://uexcorp.space/api/documentation/)
+- Star systems: Stanton (68), Pyro (64), Nyx (55)
+- Fuel price estimation: ~800 aUEC/SCU hydrogen (in-game reference price)
+- Quantum fuel per jump: ~30 SCU hydrogen (estimated for jump gate traversal)
 
-Data comes from community-reported prices via [UEX API 2.0](https://uexcorp.space/api/documentation/). Prices may be outdated or inaccurate. Always verify at a terminal before committing to a trade route.
+## Limitations
+
+- Prices are from UEX user-reported trades, not live in-game
+- Pyro routes require selecting "Pyro" in the system filter — Pyro data is limited compared to Stanton
+- Fuel estimates are based on average hydrogen prices and quantum travel distance — actual consumption varies by ship
+- Nyx system data is sparse; most profitable routes will be in Stanton or Pyro
 
 ## License
 

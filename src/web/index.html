@@ -11,6 +11,7 @@
     <div class="noise"></div>
 
     <div class="container">
+
         <!-- Header -->
         <header class="header">
             <div class="logo">
@@ -22,39 +23,99 @@
                     <span class="subtitle">Star Citizen Cargo Calculator</span>
                 </div>
             </div>
-            <div class="header-meta">
+            <div class="header-right">
+                <span id="cacheStatus" class="cache-status">
+                    <span class="cache-dot" id="cacheDot">●</span>
+                    <span id="cacheLabel">Ready</span>
+                </span>
+                <button id="refreshBtn" class="btn-icon-only" title="Refresh data">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                        <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
+                    </svg>
+                </button>
                 <span id="lastUpdated" class="update-time"></span>
             </div>
         </header>
 
         <!-- Input Section -->
         <section class="input-section">
+
+            <!-- Ship quick-select -->
             <div class="input-group">
-                <label for="scuInput">Cargo Capacity</label>
+                <label for="shipSelect">Ship</label>
+                <select id="shipSelect">
+                    <option value="">— Any ship —</option>
+                    <optgroup label="Small (1–32 SCU)">
+                        <option value="6:1">Nomad (6 SCU)</option>
+                        <option value="8:1">Nostromo (8 SCU)</option>
+                    </optgroup>
+                    <optgroup label="Medium (33–400 SCU)">
+                        <option value="66:4">Cutlass Black (66 SCU)</option>
+                        <option value="120:4">Freelancer (120 SCU)</option>
+                        <option value="180:8">Corsair (180 SCU)</option>
+                        <option value="128:4">Spirit C1 (128 SCU)</option>
+                        <option value="256:8" selected>Constellation Taurus (256 SCU)</option>
+                        <option value="160:4">Valkyrie (160 SCU)</option>
+                    </optgroup>
+                    <optgroup label="Large (401–2000 SCU)">
+                        <option value="576:16">Caterpillar (576 SCU)</option>
+                        <option value="288:16">Caterpillar Solo (288 SCU)</option>
+                        <option value="200:4">Hull A (200 SCU)</option>
+                        <option value="500:8">Hull B (500 SCU)</option>
+                        <option value="1500:16">Hull C (1500 SCU)</option>
+                        <option value="2000:32">Hull D (2000 SCU)</option>
+                        <option value="400:16">Starfarer (400 SCU)</option>
+                        <option value="240:4">Carrack (240 SCU)</option>
+                    </optgroup>
+                    <optgroup label="Extra Large (2001+ SCU)">
+                        <option value="5000:32">Cargo Bridge (5,000 SCU)</option>
+                        <option value="8000:32">Cargo Platform (8,000 SCU)</option>
+                        <option value="3200:32">Expanse (3,200 SCU)</option>
+                    </optgroup>
+                </select>
+            </div>
+
+            <!-- SCU input -->
+            <div class="input-group">
+                <label for="scuInput">Cargo (SCU)</label>
                 <div class="input-wrapper">
                     <input
                         type="number"
                         id="scuInput"
-                        placeholder="Enter SCU (1–16000)"
+                        placeholder="Manual SCU override"
                         min="1"
                         max="16000"
-                        autofocus
                     >
                     <span class="input-suffix">SCU</span>
                 </div>
             </div>
-            <button id="calcBtn" class="btn-primary">
-                <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
-                </svg>
-                Calculate Routes
-            </button>
+
+            <!-- System selector -->
+            <div class="input-group">
+                <label for="systemSelect">System</label>
+                <select id="systemSelect">
+                    <option value="68">Stanton</option>
+                    <option value="64">Pyro</option>
+                    <option value="55">Nyx</option>
+                </select>
+            </div>
+
+            <!-- Calculate -->
+            <div class="input-group btn-group">
+                <label>&nbsp;</label>
+                <button id="calcBtn" class="btn-primary">
+                    <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                    </svg>
+                    Calculate
+                </button>
+            </div>
         </section>
 
         <!-- Loading -->
         <div id="loading" class="loading hidden">
             <div class="spinner"></div>
-            <span>Fetching routes from UEX...</span>
+            <span id="loadingText">Fetching routes from UEX...</span>
         </div>
 
         <!-- Error -->
@@ -62,12 +123,23 @@
 
         <!-- Results -->
         <section id="results" class="results hidden">
-            <!-- Fuel Summary -->
-            <div class="fuel-summary">
-                <svg class="fuel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                    <path d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
-                </svg>
-                <span>Est. total fuel cost: <strong id="fuelTotal">0</strong> aUEC</span>
+
+            <!-- Summary bar -->
+            <div class="summary-bar">
+                <div class="summary-item">
+                    <span class="summary-label">Routes shown</span>
+                    <span class="summary-value" id="routeCount">3</span>
+                </div>
+                <div class="summary-divider"></div>
+                <div class="summary-item">
+                    <span class="summary-label">Est. fuel cost</span>
+                    <span class="summary-value warning" id="fuelTotal">0</span>
+                </div>
+                <div class="summary-divider"></div>
+                <div class="summary-item">
+                    <span class="summary-label">Data age</span>
+                    <span class="summary-value" id="dataAge">—</span>
+                </div>
             </div>
 
             <!-- Routes List -->
@@ -79,7 +151,7 @@
             <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
                 <path d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/>
             </svg>
-            <p>Enter your cargo capacity and calculate</p>
+            <p>Select a ship or enter SCU, then calculate</p>
             <p class="empty-hint">Top 3 profit routes will appear here</p>
         </section>
     </div>
@@ -89,6 +161,8 @@
         <span>Data from <a href="https://uexcorp.space" target="_blank">UEX API</a></span>
         <span class="sep">·</span>
         <span>Fuel deducted from profit</span>
+        <span class="sep">·</span>
+        <span id="versionTag">v0.2.0</span>
     </footer>
 
     <script src="app.js"></script>
