@@ -1,12 +1,18 @@
 //! Freight — Star Citizen Cargo Profit Calculator
 //!
 //! Dead-simple: enter cargo SCU, get top 3 profit routes with fuel cost subtracted.
+//!
+//! Usage:
+//!   freight           # TUI mode (default)
+//!   freight --web     # Web UI mode (http://localhost:8080)
+//!   freight --web --port 9000  # Web UI on custom port
 
 mod api;
 mod calculation;
 mod cli;
 mod error;
 mod models;
+mod web_server;
 
 use anyhow::Result;
 use chrono::Utc;
@@ -29,6 +35,27 @@ async fn main() -> Result<()> {
     // Load .env if present
     let _ = dotenvy::dotenv();
 
+    let args: Vec<String> = std::env::args().collect();
+
+    // Web server mode
+    if args.contains(&"--web".to_string()) {
+        let port = args
+            .iter()
+            .position(|a| a == "--port")
+            .and_then(|i| args.get(i + 1)?.parse().ok())
+            .unwrap_or(8080);
+
+        let token = std::env::var("UEX_API_TOKEN").ok();
+        web_server::start_server(port, token).await?;
+        return Ok(());
+    }
+
+    // TUI mode (original logic)
+    run_tui().await
+}
+
+/// Run the terminal TUI mode.
+async fn run_tui() -> Result<()> {
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -75,7 +102,8 @@ async fn main() -> Result<()> {
                                     &input_value,
                                     &mut app_state,
                                     &mut error_msg,
-                                ).await;
+                                )
+                                .await;
                             }
                         }
                         KeyCode::Char(c) if c.is_ascii_digit() => {
@@ -131,7 +159,10 @@ async fn calculate_and_render(
     let scu: u32 = match input_value.trim().parse() {
         Ok(n) if n > 0 && n <= 16000 => n,
         _ => {
-            *error_msg = Some(format!("Invalid cargo size: '{}'. Enter 1-16000 SCU.", input_value));
+            *error_msg = Some(format!(
+                "Invalid cargo size: '{}'. Enter 1-16000 SCU.",
+                input_value
+            ));
             return true;
         }
     };

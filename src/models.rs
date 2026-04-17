@@ -229,7 +229,7 @@ pub struct Terminal {
 // Application domain models (enriched/processed)
 // ============================================================================
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum StockLevel {
     High,
     Medium,
@@ -254,7 +254,7 @@ impl StockLevel {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct RankedRoute {
     pub rank: u8,
     pub stars: u8,

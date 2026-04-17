@@ -36,8 +36,15 @@ chrono = { version = "0.4", features = ["serde"] }
 # Environment variables
 dotenvy = "0.15"
 
-# Async caching
-# (manual in-memory cache, no external crate needed)
+# Web server
+axum = "0.8"
+tower-http = { version = "0.6", features = ["fs", "cors"] }
+tower = "0.5"
+http = "1"
+
+# Embedded static files
+rust-embed = "8"
+mime_guess = "2"
 
 [profile.release]
 opt-level = 3

@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Freight — SC Cargo Calculator</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="bg-glow"></div>
+    <div class="noise"></div>
+
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="logo">
+                <svg class="logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/>
+                </svg>
+                <div>
+                    <h1>FREIGHT</h1>
+                    <span class="subtitle">Star Citizen Cargo Calculator</span>
+                </div>
+            </div>
+            <div class="header-meta">
+                <span id="lastUpdated" class="update-time"></span>
+            </div>
+        </header>
+
+        <!-- Input Section -->
+        <section class="input-section">
+            <div class="input-group">
+                <label for="scuInput">Cargo Capacity</label>
+                <div class="input-wrapper">
+                    <input
+                        type="number"
+                        id="scuInput"
+                        placeholder="Enter SCU (1–16000)"
+                        min="1"
+                        max="16000"
+                        autofocus
+                    >
+                    <span class="input-suffix">SCU</span>
+                </div>
+            </div>
+            <button id="calcBtn" class="btn-primary">
+                <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                </svg>
+                Calculate Routes
+            </button>
+        </section>
+
+        <!-- Loading -->
+        <div id="loading" class="loading hidden">
+            <div class="spinner"></div>
+            <span>Fetching routes from UEX...</span>
+        </div>
+
+        <!-- Error -->
+        <div id="errorBox" class="error-box hidden"></div>
+
+        <!-- Results -->
+        <section id="results" class="results hidden">
+            <!-- Fuel Summary -->
+            <div class="fuel-summary">
+                <svg class="fuel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+                </svg>
+                <span>Est. total fuel cost: <strong id="fuelTotal">0</strong> aUEC</span>
+            </div>
+
+            <!-- Routes List -->
+            <div id="routesList" class="routes-list"></div>
+        </section>
+
+        <!-- Empty State -->
+        <section id="emptyState" class="empty-state">
+            <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+                <path d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/>
+            </svg>
+            <p>Enter your cargo capacity and calculate</p>
+            <p class="empty-hint">Top 3 profit routes will appear here</p>
+        </section>
+    </div>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <span>Data from <a href="https://uexcorp.space" target="_blank">UEX API</a></span>
+        <span class="sep">·</span>
+        <span>Fuel deducted from profit</span>
+    </footer>
+
+    <script src="app.js"></script>
+</body>
+</html>

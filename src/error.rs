@@ -1,5 +1,6 @@
 //! Error types for the Freight application.
 
+use axum::{response::IntoResponse, http::StatusCode};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -21,6 +22,21 @@ pub enum AppError {
 
     #[error("HTTP error: {0}")]
     HttpError(#[from] reqwest::Error),
+}
+
+impl IntoResponse for AppError {
+    fn into_response(self) -> axum::response::Response {
+        let status = match &self {
+            AppError::ApiUnreachable => StatusCode::SERVICE_UNAVAILABLE,
+            AppError::RateLimited => StatusCode::TOO_MANY_REQUESTS,
+            AppError::InvalidResponse(_) => StatusCode::BAD_GATEWAY,
+            AppError::NoRoutesFound(_) => StatusCode::NOT_FOUND,
+            AppError::InvalidInput(_) => StatusCode::BAD_REQUEST,
+            AppError::HttpError(_) => StatusCode::BAD_GATEWAY,
+        };
+        let body = serde_json::json!({ "error": self.to_string() });
+        (status, axum::Json(body)).into_response()
+    }
 }
 
 impl AppError {
