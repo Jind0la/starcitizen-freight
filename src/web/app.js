@@ -333,7 +333,37 @@ function setReady(ts) {
   if (ts) lastUpdated.textContent = ts;
 }
 
+// ─── URL Param handling ─────────────────────────────────────────────
+const SYSTEM_MAP = { stanton: 68, pyro: 64, nyx: 55 };
+const TAB_MAP = { intra: 'intra', interstellar: 'interstellar', all: 'all' };
+
+function readUrlParams() {
+  const params = new URLSearchParams(window.location.search);
+
+  const scu = params.get('scu');
+  if (scu && !isNaN(parseInt(scu, 10))) {
+    state.scu = parseInt(scu, 10);
+    scuInput.value = state.scu;
+  }
+
+  const system = params.get('system');
+  if (system && SYSTEM_MAP[system.toLowerCase()] !== undefined) {
+    state.systemId = SYSTEM_MAP[system.toLowerCase()];
+    systemSelect.value = state.systemId;
+  }
+
+  const tab = params.get('tab');
+  if (tab && TAB_MAP[tab.toLowerCase()]) {
+    const t = TAB_MAP[tab.toLowerCase()];
+    state.tab = t;
+    tabBtns.forEach(b => {
+      b.classList.toggle('active', b.dataset.tab === t);
+    });
+  }
+}
+
 // ─── Auto-load on page load ─────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', () => {
+  readUrlParams();
   calculate();
 });
